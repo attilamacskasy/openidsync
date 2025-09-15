@@ -1,0 +1,23 @@
+{
+  "DomainPromotionConfig": {
+    "DomainName": "macskasy.com",
+    "NetBIOSName": "MACSKASY",
+    "DNSDelegation": false,
+    "InstallDNS": true,
+    "DatabasePath": "C:\\Windows\\NTDS",
+    "LogPath": "C:\\Windows\\NTDS",
+    "SYSVOLPath": "C:\\Windows\\SYSVOL",
+    "InstallServerRoles": true,
+    "AdministratorUsername": "administrator"
+  },
+  "PrepareConfig": {
+    "InstallDNS": true,
+    "MinActiveDirectoryDsc": "6.2.0",
+    "MinPSDscResources": "2.12.0.0"
+  },
+  "UserSyncConfig": {
+    "CsvPath": ".\\users_9_15_2025 9_17_18 PM.csv",
+    "DefaultOU": "CN=Users,DC=modernworkplace,DC=hu",
+    "SuggestRemovals": true
+  }
+}
