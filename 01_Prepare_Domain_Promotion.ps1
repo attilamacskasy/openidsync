@@ -156,14 +156,67 @@ foreach ($f in $features) {
     }
 }
 
-# Verify ADDSForest resource is available
+# Verify ADDomain resource is available with diagnostics and retries
+function _List-ModuleFiles {
+    param($ModuleName)
+    try {
+        $mod = Get-Module -ListAvailable -Name $ModuleName | Select-Object -First 1
+        if ($mod) {
+            Write-Log "Module path: $($mod.ModuleBase)"
+            Get-ChildItem -Path $mod.ModuleBase -Recurse -ErrorAction SilentlyContinue | Select-Object FullName | ForEach-Object { Write-Log "  $_" }
+        } else {
+            Write-Log "Module $ModuleName not present in Get-Module -ListAvailable"
+        }
+    } catch {
+        Write-Log ("Failed to list files for module {0}: {1}" -f $ModuleName, $_.Exception.Message)
+    }
+}
+
 try {
-    $res = Get-DscResource -Name ADDSForest -Module ActiveDirectoryDsc -ErrorAction Stop
-    if ($null -eq $res) { throw 'ADDSForest resource not found.' }
-    Write-Log 'DSC resource ADDSForest is available.'
+    Write-Log 'Verifying ADDomain DSC resource availability...'
+    $res = Get-DscResource -Name ADDomain -Module ActiveDirectoryDsc -ErrorAction SilentlyContinue
+    if ($res) {
+        Write-Log 'DSC resource ADDomain is available.'
+    } else {
+    Write-Log 'ADDomain resource not found. Attempting to import ActiveDirectoryDsc module and retry.'
+        try {
+            Import-Module ActiveDirectoryDsc -Force -ErrorAction Stop
+            Start-Sleep -Seconds 2
+            $res = Get-DscResource -Name ADDomain -Module ActiveDirectoryDsc -ErrorAction SilentlyContinue
+        } catch {
+            Write-Log "Import-Module ActiveDirectoryDsc failed: $($_.Exception.Message)"
+        }
+
+        if ($res) {
+            Write-Log 'DSC resource ADDomain became available after import.'
+        } else {
+            Write-Log 'ADDomain still not found. Will attempt to reinstall ActiveDirectoryDsc from PSGallery and retry.'
+            _List-ModuleFiles -ModuleName 'ActiveDirectoryDsc'
+            try {
+                Install-Module -Name ActiveDirectoryDsc -Force -AllowClobber -Scope AllUsers -ErrorAction Stop
+                Import-Module ActiveDirectoryDsc -Force -ErrorAction Stop
+                Start-Sleep -Seconds 2
+                $res = Get-DscResource -Name ADDomain -Module ActiveDirectoryDsc -ErrorAction SilentlyContinue
+            } catch {
+                Write-Log "Reinstall attempt failed: $($_.Exception.Message)"
+            }
+        }
+
+        if ($res) {
+            Write-Log 'DSC resource ADDomain is available after reinstall.'
+        } else {
+            Write-Log 'ERROR: ActiveDirectoryDsc resource ADDomain still not available after retries.'
+            Write-Log 'Diagnostic commands you can run manually:'
+            Write-Log '  Get-Module -ListAvailable ActiveDirectoryDsc'
+            Write-Log '  Get-DscResource | Where-Object Name -like "*ADDomain*"'
+            Write-Log '  Get-ChildItem (Get-Module -ListAvailable ActiveDirectoryDsc).ModuleBase -Recurse'
+            Write-Log 'If these do not show ADDomain resources, verify the module version and that you are running Windows PowerShell (not PowerShell Core).'
+            throw 'ADDomain DSC resource not available; see logs for diagnostics.'
+        }
+    }
 } catch {
-    Write-Log "ERROR: ActiveDirectoryDsc resource ADDSForest not available: $($_.Exception.Message)"
+    Write-Log "ERROR: ActiveDirectoryDsc resource ADDomain not available: $($_.Exception.Message)"
     throw
 }
 
-Write-Log 'Prerequisite installation completed successfully. You can now run .\DomainPromotionConfig.ps1.'
+Write-Log 'Prerequisite installation completed successfully. You can now run .\02_Domain_Promotion.ps1.'
