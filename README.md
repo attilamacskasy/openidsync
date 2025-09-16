@@ -24,7 +24,7 @@ You will be prompted for:
 ```powershell
 ./03_Sync_Users_from_M365_CSV_Export.ps1
 # Example override
-./03_Sync_Users_from_M365_CSV_Export.ps1 -CsvPath ".\users_9_15_2025 9_17_18 PM.csv" -DefaultOU "CN=Users,DC=modernworkplace,DC=hu"
+./03_Sync_Users_from_M365_CSV_Export.ps1 -CsvPath ".\users_9_15_2025 9_17_18 PM.csv" -DefaultOU "CN=Users,DC=macskasy,DC=com"
 ```
 
 ## Files
