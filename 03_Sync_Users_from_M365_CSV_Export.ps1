@@ -244,7 +244,7 @@ function Process-User {
             Write-Log -Level 'RESULT' -Message "Updated: $upn"
         }
         catch {
-            Write-Log -Level 'ERROR' -Message "Failed to update $upn: $($_.Exception.Message)"
+            Write-Log -Level 'ERROR' -Message "Failed to update ${upn}: $($_.Exception.Message)"
         }
     }
     else {
@@ -309,7 +309,7 @@ function Process-User {
             Write-Log -Level 'RESULT' -Message "Created: $upn"
         }
         catch {
-            Write-Log -Level 'ERROR' -Message "Failed to create $upn: $($_.Exception.Message)"
+            Write-Log -Level 'ERROR' -Message "Failed to create ${upn}: $($_.Exception.Message)"
         }
     }
 }
