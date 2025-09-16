@@ -18,6 +18,8 @@
   "UserSyncConfig": {
     "CsvPath": ".\\users_9_15_2025 9_17_18 PM.csv",
     "DefaultOU": "CN=Users,DC=macskasy,DC=com",
-    "SuggestRemovals": true
+    "SuggestRemovals": true,
+    "SkipUserBasedOnDisplayName": ["(Archive)", "(Temp)"],
+    "SkipUserBasedOnUserPrincipalName": ["#EXT#", "Temporary"]
   }
 }

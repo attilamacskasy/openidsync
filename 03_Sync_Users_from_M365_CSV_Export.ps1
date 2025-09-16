@@ -62,6 +62,18 @@ function Write-CredentialLog {
     "$Email,$UserPrincipalName,$SamAccountName,$Password" | Out-File -FilePath $script:CredLogPath -Encoding UTF8 -Append
 }
 
+function Add-Summary {
+    param([string]$Key)
+    if (-not $script:Summary) { $script:Summary = @{} }
+    $current = $script:Summary[$Key]
+    if ($null -ne $current) {
+        $script:Summary[$Key] = [int]$current + 1
+    }
+    else {
+        $script:Summary[$Key] = 1
+    }
+}
+
 function Show-UserCard {
     param($Row)
     Write-Host ""
@@ -165,16 +177,48 @@ function Process-User {
 
     if ([string]::IsNullOrWhiteSpace($upn)) {
         Write-Log -Level 'WARN' -Message "Skipping row with empty UPN."
+        Add-Summary 'SkippedEmptyUPN'
         return
+    }
+
+    # Skip based on UPN tokens from config
+    if ($script:SkipUpnTokens -and $script:SkipUpnTokens.Count -gt 0) {
+        $upnLc = $upn.ToLower()
+        foreach ($tok in $script:SkipUpnTokens) {
+            if (-not [string]::IsNullOrWhiteSpace($tok)) {
+                $tokLc = ([string]$tok).ToLower()
+                if ($upnLc -like "*${tokLc}*") {
+                    Write-Log -Level 'RESULT' -Message "Skipped by UPN token '${tok}': ${upn}"
+                    Add-Summary 'SkippedByUPN'
+                    return
+                }
+            }
+        }
+    }
+
+    # Skip based on Display name tokens from config
+    if ($script:SkipDisplayNameTokens -and $script:SkipDisplayNameTokens.Count -gt 0 -and $display) {
+        $dispLc = $display.ToLower()
+        foreach ($tok in $script:SkipDisplayNameTokens) {
+            if (-not [string]::IsNullOrWhiteSpace($tok)) {
+                $tokLc = $tok.ToLower()
+                if ($dispLc -like "*${tokLc}*") {
+                    Write-Log -Level 'RESULT' -Message "Skipped by DisplayName token '${tok}': ${display} (${upn})"
+                    Add-Summary 'SkippedByDisplayName'
+                    return
+                }
+            }
+        }
     }
 
     Show-UserCard -Row $Row
 
     $proceed = $false
+    $skippedByPrompt = $false
     if ($script:ProcessAll) {
         $proceed = $true
     } else {
-        $q = "Do you want to import user $first $last ($upn) [Y]es/[N]o/[A]ll"
+        $q = "Do you want to import user $first $last ($upn) [Y]es/[N]o/[A]ll/[Q]uit"
         $answer = Read-Host $q
         Write-Log -Level 'PROMPT' -Message "$q -> [$answer]"
         switch ($answer.ToUpper()) {
@@ -182,11 +226,16 @@ function Process-User {
             'YES' { $proceed = $true }
             'A' { $proceed = $true; $script:ProcessAll = $true }
             'ALL' { $proceed = $true; $script:ProcessAll = $true }
-            default { $proceed = $false }
+            'Q' { $script:QuitRequested = $true; $proceed = $false }
+            'QUIT' { $script:QuitRequested = $true; $proceed = $false }
+            'N' { $proceed = $false; $skippedByPrompt = $true }
+            'NO' { $proceed = $false; $skippedByPrompt = $true }
+            default { $proceed = $false; $skippedByPrompt = $true }
         }
     }
 
     if (-not $proceed) {
+        if (-not $script:QuitRequested -and $skippedByPrompt) { Add-Summary 'SkippedPrompt' }
         Write-Log -Level 'RESULT' -Message "Skipped: $upn"
         return
     }
@@ -196,13 +245,14 @@ function Process-User {
     if ($existing) {
         if ($existing.SamAccountName -ieq 'administrator') {
             Write-Log -Level 'WARN' -Message "Skip managing 'administrator' account."
+            Add-Summary 'SkippedAdministrator'
             return
         }
 
         $desc = Get-NextDescription -Existing $existing.Description
         $proxyAddrs = @()
         if ($proxyString) {
-            $proxyAddrs = ($proxyString -split '\+') | Where-Object { $_ -match 'smtp:' } | ForEach-Object { $_.Trim() } | Select-Object -Unique
+                $proxyAddrs = @($proxyString -split '\+') | Where-Object { $_ -match 'smtp:' } | ForEach-Object { [string]$_.Trim() } | Sort-Object -Unique
         }
 
         Write-Log -Level 'ACTION' -Message "Updating existing AD user: $($existing.SamAccountName) ($email)"
@@ -220,19 +270,19 @@ function Process-User {
                 -State $state `
                 -PostalCode $postal `
                 -StreetAddress $street `
-                -Country $countryOrRegion `
                 -MobilePhone $mobile `
                 -OfficePhone $phone `
                 -Description $desc
 
             if ($proxyAddrs.Count -gt 0) {
-                Set-ADUser -Identity $existing.DistinguishedName -Replace @{ proxyAddresses = $proxyAddrs } -ErrorAction SilentlyContinue
+                try { Set-ADUser -Identity $existing.DistinguishedName -Replace @{ proxyAddresses = ([string[]]$proxyAddrs) } -ErrorAction Stop }
+                catch { Write-Log -Level 'WARN' -Message "Failed to set proxyAddresses for ${upn}: $($_.Exception.Message)" }
             }
 
             if ($pwdNeverExpires) {
-                Set-ADUser -Identity $existing.DistinguishedName -PasswordNeverExpires $true
+                Set-ADUser -Identity $existing.DistinguishedName -PasswordNeverExpires $true -ErrorAction SilentlyContinue
             } else {
-                Set-ADUser -Identity $existing.DistinguishedName -PasswordNeverExpires $false
+                Set-ADUser -Identity $existing.DistinguishedName -PasswordNeverExpires $false -ErrorAction SilentlyContinue
             }
 
             if ($blocked) {
@@ -241,10 +291,17 @@ function Process-User {
                 Enable-ADAccount -Identity $existing.DistinguishedName -ErrorAction SilentlyContinue
             }
 
+            # Set country friendly name (co) if provided
+            if ($countryOrRegion) {
+                try { Set-ADUser -Identity $existing.DistinguishedName -Replace @{ co = [string]$countryOrRegion } -ErrorAction SilentlyContinue } catch { Write-Log -Level 'WARN' -Message "Failed to set country (co) for ${upn}: $($_.Exception.Message)" }
+            }
+
             Write-Log -Level 'RESULT' -Message "Updated: $upn"
+            Add-Summary 'Updated'
         }
         catch {
             Write-Log -Level 'ERROR' -Message "Failed to update ${upn}: $($_.Exception.Message)"
+            Add-Summary 'FailedUpdate'
         }
     }
     else {
@@ -253,19 +310,21 @@ function Process-User {
         $sam = Next-AvailableSam -BaseSam $baseSam
         if ($sam -ieq 'administrator') {
             Write-Log -Level 'WARN' -Message "Skip creating user with sAMAccountName 'administrator'."
+            Add-Summary 'SkippedAdministrator'
             return
         }
 
         $desc = Get-NextDescription -Existing $null
         $proxyAddrs = @()
         if ($proxyString) {
-            $proxyAddrs = ($proxyString -split '\+') | Where-Object { $_ -match 'smtp:' } | ForEach-Object { $_.Trim() } | Select-Object -Unique
+                $proxyAddrs = @($proxyString -split '\+') | Where-Object { $_ -match 'smtp:' } | ForEach-Object { [string]$_.Trim() } | Sort-Object -Unique
         }
 
         $passwordPlain = New-RandomPassword -Length 16
         $password = ConvertTo-SecureString $passwordPlain -AsPlainText -Force
 
         Write-Log -Level 'ACTION' -Message "Creating AD user: $sam ($email) in OU: $DefaultOU"
+        # Create first; if it fails, do not attempt post-creation updates
         try {
             New-ADUser `
                 -SamAccountName $sam `
@@ -282,34 +341,42 @@ function Process-User {
                 -State $state `
                 -PostalCode $postal `
                 -StreetAddress $street `
-                -Country $countryOrRegion `
                 -Enabled ($blocked -eq $false) `
                 -ChangePasswordAtLogon $false `
                 -AccountPassword $password `
                 -Path $DefaultOU `
                 -Description $desc
 
-            # Set proxy addresses if available
+            # Credentials must be logged immediately upon successful creation
+            Write-CredentialLog -Email $email -UserPrincipalName $upn -SamAccountName $sam -Password $passwordPlain
+            Write-Log -Level 'RESULT' -Message "Created: $upn"
+            Add-Summary 'Created'
+        }
+        catch {
+            Write-Log -Level 'ERROR' -Message "Failed to create ${upn}: $($_.Exception.Message)"
+            Add-Summary 'FailedCreate'
+            return
+        }
+
+        # Post-creation updates (best-effort; do not affect credentials logging)
+        try {
             if ($proxyAddrs.Count -gt 0) {
                 $newly = Get-ADUser -Filter "SamAccountName -eq '$sam'" -Properties proxyAddresses
                 if ($newly) {
-                    Set-ADUser -Identity $newly.DistinguishedName -Replace @{ proxyAddresses = $proxyAddrs } -ErrorAction SilentlyContinue
+                    Set-ADUser -Identity $newly.DistinguishedName -Replace @{ proxyAddresses = ([string[]]$proxyAddrs) } -ErrorAction Stop
                 }
             }
+        } catch {
+            Write-Log -Level 'WARN' -Message "Failed to set proxyAddresses for ${upn}: $($_.Exception.Message)"
+        }
 
-            # Password never expires setting
+        try {
             $newly2 = Get-ADUser -Filter "SamAccountName -eq '$sam'"
             if ($newly2) {
                 Set-ADUser -Identity $newly2.DistinguishedName -PasswordNeverExpires $pwdNeverExpires -ErrorAction SilentlyContinue
             }
-
-            # Log credentials (requested)
-            Write-CredentialLog -Email $email -UserPrincipalName $upn -SamAccountName $sam -Password $passwordPlain
-
-            Write-Log -Level 'RESULT' -Message "Created: $upn"
-        }
-        catch {
-            Write-Log -Level 'ERROR' -Message "Failed to create ${upn}: $($_.Exception.Message)"
+        } catch {
+            Write-Log -Level 'WARN' -Message "Failed to set PasswordNeverExpires for ${upn}: $($_.Exception.Message)"
         }
     }
 }
@@ -370,6 +437,22 @@ if (Test-Path -LiteralPath $ConfigPath) {
             if (-not $PSBoundParameters.ContainsKey('NoSuggestRemovals') -and $null -ne $usc.SuggestRemovals) {
                 if (-not [bool]$usc.SuggestRemovals) { $NoSuggestRemovals = $true }
             }
+            # Load display name skip tokens
+            if ($usc.SkipUserBasedOnDisplayName -and $usc.SkipUserBasedOnDisplayName.Count -gt 0) {
+                $script:SkipDisplayNameTokens = @($usc.SkipUserBasedOnDisplayName | ForEach-Object { [string]$_ })
+            }
+            # Load UPN skip tokens
+            if ($usc.SkipUserBasedOnUserPrincipalName -and $usc.SkipUserBasedOnUserPrincipalName.Count -gt 0) {
+                $script:SkipUpnTokens = @($usc.SkipUserBasedOnUserPrincipalName | ForEach-Object { [string]$_ })
+            }
+            # Always include base UPN skip substrings regardless of config
+            $baseUpnSkips = @('archiv','temp')
+            if (-not $script:SkipUpnTokens) { $script:SkipUpnTokens = @() }
+            foreach ($b in $baseUpnSkips) {
+                $exists = $false
+                foreach ($t in $script:SkipUpnTokens) { if (([string]$t).ToLower() -eq $b) { $exists = $true; break } }
+                if (-not $exists) { $script:SkipUpnTokens += $b }
+            }
         }
     } catch {}
 }
@@ -384,6 +467,24 @@ if (-not $DefaultOU) {
 }
 if ([string]::IsNullOrWhiteSpace($DefaultOU)) {
     throw "Default OU is required."
+}
+
+# Default SkipDisplayNameTokens if none provided in JSON
+if (-not $script:SkipDisplayNameTokens -or $script:SkipDisplayNameTokens.Count -eq 0) {
+    $script:SkipDisplayNameTokens = @('(Archive)', '(Temp)')
+}
+
+# Default SkipUpnTokens if none provided in JSON
+if (-not $script:SkipUpnTokens -or $script:SkipUpnTokens.Count -eq 0) {
+    $script:SkipUpnTokens = @('#EXT#', 'Temporary', 'archiv', 'temp')
+} else {
+    # Ensure base UPN skip substrings are present
+    $baseUpnSkips = @('archiv','temp')
+    foreach ($b in $baseUpnSkips) {
+        $exists = $false
+        foreach ($t in $script:SkipUpnTokens) { if (([string]$t).ToLower() -eq $b) { $exists = $true; break } }
+        if (-not $exists) { $script:SkipUpnTokens += $b }
+    }
 }
 
 # Logs
@@ -406,6 +507,20 @@ if (-not $rows -or $rows.Count -eq 0) {
 }
 
 $script:ProcessAll = $false
+$script:QuitRequested = $false
+
+# Initialize summary counters
+$script:Summary = [ordered]@{
+    Created = 0
+    Updated = 0
+    SkippedByUPN = 0
+    SkippedByDisplayName = 0
+    SkippedPrompt = 0
+    SkippedEmptyUPN = 0
+    SkippedAdministrator = 0
+    FailedCreate = 0
+    FailedUpdate = 0
+}
 
 # Process users
 foreach ($row in $rows) {
@@ -415,15 +530,48 @@ foreach ($row in $rows) {
     $last = $row.'Last name'
 
     Process-User -Row $row -DefaultOU $DefaultOU
+
+    if ($script:QuitRequested) {
+        Write-Log -Level 'INFO' -Message 'Quit requested by user. Stopping import.'
+        break
+    }
 }
 
 # Suggest removals (not deleting, only suggesting)
-if (-not $NoSuggestRemovals) {
+if (-not $NoSuggestRemovals -and -not $script:QuitRequested) {
     $csvEmails = $rows | ForEach-Object {
         $p = Get-PrimarySmtpFromProxyAddresses -ProxyString $_.'Proxy addresses'
         if ($p) { $p } else { $_.'User principal name' }
     }
     Suggest-Removals -DefaultOU $DefaultOU -CsvEmails $csvEmails
+} elseif ($script:QuitRequested) {
+    Write-Log -Level 'INFO' -Message 'Skip removal suggestions due to quit request.'
+}
+
+# Print summary table
+try {
+    Write-Host ""
+    Write-Host "==================== SUMMARY ====================" -ForegroundColor Cyan
+    $summaryRows = @()
+    foreach ($k in $script:Summary.Keys) {
+        $summaryRows += [pscustomobject]@{ Action = $k; Count = [int]$script:Summary[$k] }
+    }
+    $summaryRows = $summaryRows | Where-Object { $_.Count -gt 0 } | Sort-Object -Property Action
+    if ($summaryRows.Count -gt 0) {
+        $table = ($summaryRows | Format-Table -AutoSize | Out-String)
+        Write-Host $table
+        foreach ($row in $summaryRows) {
+            Write-Log -Level 'INFO' -Message ("Summary -> {0}: {1}" -f $row.Action, $row.Count)
+        }
+    } else {
+        Write-Host "No actions recorded."
+        Write-Log -Level 'INFO' -Message 'Summary -> No actions recorded.'
+    }
+    Write-Host "==================================================" -ForegroundColor Cyan
+    Write-Host ""
+}
+catch {
+    Write-Log -Level 'ERROR' -Message "Failed to print summary: $($_.Exception.Message)"
 }
 
 Write-Log -Level 'INFO' -Message "Finished."
