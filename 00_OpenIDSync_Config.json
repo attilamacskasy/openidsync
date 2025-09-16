@@ -17,7 +17,7 @@
   },
   "UserSyncConfig": {
     "CsvPath": ".\\users_9_15_2025 9_17_18 PM.csv",
-    "DefaultOU": "CN=Users,DC=modernworkplace,DC=hu",
+    "DefaultOU": "CN=Users,DC=macskasy,DC=com",
     "SuggestRemovals": true
   }
 }
