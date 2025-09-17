@@ -10,3 +10,9 @@ openidsync_credentials_*.csv
 
 # VS Code workspace
 .vscode/
+
+# Ignore the tmp folder
+tmp/
+
+# Ignore logs in rclone-deploy
+rclone-deploy/log/

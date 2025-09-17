@@ -28,14 +28,35 @@ function Write-Log {
 
 try { Import-RequiredModule -Name ActiveDirectory } catch { throw }
 
-# Resolve SearchBase from JSON if not provided
-if (-not $SearchBase -and (Test-Path -LiteralPath $ConfigPath)) {
-    try {
-        $cfg = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
-        if ($cfg -and $cfg.UserSyncConfig -and $cfg.UserSyncConfig.DefaultOU) {
-            $SearchBase = [string]$cfg.UserSyncConfig.DefaultOU
+# Resolve SearchBase from JSON if not provided (robust)
+$effectiveConfigPath = $ConfigPath
+try {
+    if (-not (Test-Path -LiteralPath $effectiveConfigPath)) {
+        # Fallback to current working directory if script root variant is missing
+        $alt = Join-Path -Path (Get-Location) -ChildPath '00_OpenIDSync_Config.json'
+        if (Test-Path -LiteralPath $alt) { $effectiveConfigPath = $alt }
+    }
+} catch {}
+
+if ([string]::IsNullOrWhiteSpace($SearchBase)) {
+    if (Test-Path -LiteralPath $effectiveConfigPath) {
+        try {
+            $cfgText = Get-Content -LiteralPath $effectiveConfigPath -Raw -ErrorAction Stop
+            $cfg = $cfgText | ConvertFrom-Json -ErrorAction Stop
+            $val = $null
+            if ($cfg -and $cfg.UserSyncConfig) { $val = $cfg.UserSyncConfig.DefaultOU }
+            if (-not [string]::IsNullOrWhiteSpace($val)) {
+                $SearchBase = [string]$val
+                Write-Host "Using SearchBase from config: $SearchBase"
+            } else {
+                Write-Host "Config found but 'UserSyncConfig.DefaultOU' is empty; will prompt." -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host "Failed to load config from '$effectiveConfigPath': $($_.Exception.Message)" -ForegroundColor Yellow
         }
-    } catch {}
+    } else {
+        Write-Host "Config file not found at '$effectiveConfigPath'; will prompt for SearchBase." -ForegroundColor Yellow
+    }
 }
 
 if (-not $SearchBase) {

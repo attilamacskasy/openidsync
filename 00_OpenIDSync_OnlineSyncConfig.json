@@ -1,0 +1,9 @@
+{
+  "OnlineSyncConfig": {
+    "TenantId": "",
+    "ClientId": "",
+    "SpObjectId": "",
+    "PreferredSource": "Online",
+    "ClientSecretEnvVar": ""
+  }
+}
