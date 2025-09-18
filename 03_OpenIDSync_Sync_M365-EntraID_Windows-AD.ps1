@@ -21,6 +21,12 @@
 $script:ConfigPath = $ConfigPath
 $script:OnlineSyncConfigPath = $OnlineSyncConfigPath
 
+# Try to load logging module
+try {
+    $logModulePath = Join-Path -Path $PSScriptRoot -ChildPath '50_OpenIDSync_Logging.ps1'
+    if (Test-Path -LiteralPath $logModulePath) { . $logModulePath }
+} catch {}
+
 # ===== Graph Modules configuration (only what's needed) =====
 # Centralized list of Microsoft Graph submodules to install/import for this script.
 # Keep this minimal to avoid PS 5.1 function overflow. Add/remove here as capabilities grow.
@@ -462,10 +468,14 @@ function Write-Log {
         [ValidateSet('INFO','WARN','ERROR','PROMPT','ACTION','RESULT')]
         [string]$Level = 'INFO'
     )
-    $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-    $line = "[$ts] [$Level] $Message"
-    $line | Out-File -FilePath $script:AuditLogPath -Encoding UTF8 -Append
-    Write-Host $line
+    try {
+        Write-Syslog -Message $Message -Level $Level -MsgId '-' -Data $null
+    } catch {
+        $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+        $line = "[$ts] [$Level] $Message"
+        if ($script:AuditLogPath) { $line | Out-File -FilePath $script:AuditLogPath -Encoding UTF8 -Append }
+        Write-Host $line
+    }
 }
 
 function Write-CredentialLog {
@@ -893,6 +903,14 @@ if (Test-Path -LiteralPath $ConfigPath) {
                 if (-not $PSBoundParameters.ContainsKey('ClientSecretEnvVar') -and $oscEnvVar) { $ClientSecretEnvVar = [string]$oscEnvVar }
                 if (-not $PSBoundParameters.ContainsKey('Source') -and $oscPref) { $Source = [string]$oscPref }
             }
+            # Logging config (if present)
+            if ($cfg.LoggingConfig) {
+                $lgc = $cfg.LoggingConfig
+                try { $script:LogMode = [string]$lgc.Mode } catch {}
+                try { $script:LogFilePath = [string]$lgc.FilePath } catch {}
+                try { $script:LogSyslogServer = [string]$lgc.SyslogServer } catch {}
+                try { $script:LogSyslogPort = [int]$lgc.SyslogPort } catch {}
+            }
         }
     } catch {}
 }
@@ -944,14 +962,19 @@ if (-not $script:SkipUpnTokens -or $script:SkipUpnTokens.Count -eq 0) {
     }
 }
 
-# Logs
-$ts = Get-Date -Format 'yyyyMMdd_HHmmss'
-$script:AuditLogPath = Join-Path -Path (Get-Location) -ChildPath "openidsync_audit_$ts.log"
-$script:CredLogPath  = Join-Path -Path (Get-Location) -ChildPath "openidsync_credentials_$ts.csv"
+# Logs (default to file-only, Linux-like filenames)
+if (-not $script:LogMode) { $script:LogMode = 'File' }
+if (-not $script:LogSyslogPort) { $script:LogSyslogPort = 514 }
+$script:AuditLogPath = if ($script:LogFilePath) { [string]$script:LogFilePath } else { Join-Path -Path (Get-Location) -ChildPath 'openidsync.log' }
+$script:CredLogPath  = Join-Path -Path (Get-Location) -ChildPath 'openidsync-credentials.csv'
 
-"Email,UserPrincipalName,SamAccountName,GeneratedPassword" | Out-File -FilePath $script:CredLogPath -Encoding UTF8 -Force
-Write-Log -Level 'INFO' -Message "Audit log initialized: $AuditLogPath"
-Write-Log -Level 'INFO' -Message "Credential log initialized: $CredLogPath"
+try { Initialize-Logger -Mode $script:LogMode -FilePath $script:AuditLogPath -SyslogServer $script:LogSyslogServer -SyslogPort $script:LogSyslogPort | Out-Null } catch {}
+
+if (-not (Test-Path -LiteralPath $script:CredLogPath)) {
+    "Email,UserPrincipalName,SamAccountName,GeneratedPassword" | Out-File -FilePath $script:CredLogPath -Encoding UTF8 -Force
+}
+$syslogHostForMsg = if ($script:LogSyslogServer) { $script:LogSyslogServer } else { '-' }
+Write-Log -Level 'INFO' -Message ("Logging initialized: Mode={0}, File={1}, Syslog={2}:{3}" -f $script:LogMode, $script:AuditLogPath, $syslogHostForMsg, $script:LogSyslogPort)
 $funcCapMsg = "MaximumFunctionCount in use: $MaximumFunctionCount"
 Write-Log -Level 'INFO' -Message $funcCapMsg
 if ($Source -eq 'Online') {

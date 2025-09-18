@@ -27,5 +27,11 @@
             "#EXT#",
             "Temporary"
         ]
+    },
+    "LoggingConfig": {
+        "Mode": "File",
+        "FilePath": "./openidsync.log",
+        "SyslogServer": "",
+        "SyslogPort": 514
     }
 }

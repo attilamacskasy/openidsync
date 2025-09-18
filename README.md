@@ -14,6 +14,12 @@ Purpose: Spin up a new on‑premises Active Directory forest and interactively s
 - New: Online (Graph API) mode to pull users directly from Entra ID; optional first‑time App Registration creation; CSV mode remains available.
 - New safety tool: `04_DANGER_Remove_OpenIDSync_Managed_Users.ps1` deletes only users previously created/managed by this tool (those with `[openidsync.org]` in `description`). Includes red‑banner warnings, double confirmation, `-WhatIf`, `-Force`, and automatic backup CSV.
 
+- Logging enhancements:
+	- Structured logging module with three modes: `File`, `Syslog` (UDP), or `Both`.
+	- Human‑readable console output; file and syslog keep RFC 5424 machine format.
+	- Linux‑style default filenames: `openidsync.log` and `openidsync-credentials.csv`.
+	- Configurable via `LoggingConfig` in `00_OpenIDSync_Config.json`; defaults to file‑only.
+
 ## Quick reference (how to use it in a nutshell)
 Run these in an elevated Windows PowerShell (5.1) prompt from the repo folder.
 
@@ -52,6 +58,11 @@ You will see an "Authentication Context Used" block showing App-only with App Na
 CSV mode is still available any time:
 ```powershell
 ./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -Source CSV -CsvPath ".\users.csv" -DefaultOU "CN=Users,DC=contoso,DC=local"
+```
+
+If you need to clear cached tokens before switching auth contexts, run:
+```powershell
+./98_Reset_Azure_Login_Session.ps1
 ```
 
 ## First-time use (safe, least-privilege) — detailed steps
@@ -123,12 +134,21 @@ Step 3 — Use App-only on the next run
 	- `SkipUserBasedOnDisplayName` (array of strings): Substrings that, if found in `Display name`, skip processing that row. Defaults if omitted: `(Archive)`, `(Temp)`.
 	- `SkipUserBasedOnUserPrincipalName` (array of strings): Substrings that, if found in UPN, skip processing that row. Defaults if omitted: `#EXT#`, `Temporary`. Additionally, base substrings `archiv` and `temp` are always enforced even if not listed, and all matching is case‑insensitive.
  
+- `LoggingConfig`:
+	- `Mode` (string): `File`, `Syslog`, or `Both`. Default: `File`.
+	- `FilePath` (string): Path for the audit log. Default: `./openidsync.log` (Linux-like naming).
+	- `SyslogServer` (string): Hostname or IP of a UDP syslog server.
+	- `SyslogPort` (int): UDP port of the syslog server. Default: `514`.
+  The sync script (`03_...`) reads this block and initializes logging accordingly. Console echo is preserved. When `Mode` is `Syslog` or `Both`, logs are also sent via UDP to the configured syslog endpoint.
+ 
 - `00_OpenIDSync_OnlineSyncConfig.json` (auto‑populated; no secrets):
 	- `TenantId` (string): Entra ID tenant ID.
 	- `ClientId` (string): App Registration (application) ID.
 	- `SpObjectId` (string): Service principal object id.
 	- `PreferredSource` (string): `CSV` or `Online` default when not provided via CLI.
 	- `ClientSecretEnvVar` (string): Environment variable name used to read the client secret (default `OPENIDSYNC_CLIENT_SECRET`).
+
+Important: The online sync IDs are only persisted in `00_OpenIDSync_OnlineSyncConfig.json`. The main config `00_OpenIDSync_Config.json` is never auto‑modified by the online sync code.
 
 Example JSON (trimmed):
 ```json
@@ -223,8 +243,13 @@ Install-Module Microsoft.Graph.Authentication,Microsoft.Graph.Users,Microsoft.Gr
 ```
 
 ## Logs
-- Audit log: `openidsync_audit_YYYYMMDD_HHMMSS.log`
-- Credentials log: `openidsync_credentials_YYYYMMDD_HHMMSS.csv` (store securely)
+- Audit log: `openidsync.log` (default path `./openidsync.log`; configurable via `LoggingConfig.FilePath`)
+- Credentials log: `openidsync-credentials.csv` (store securely; written alongside the audit log)
+
+Notes:
+- Console output is human‑readable; file and syslog outputs use RFC 5424 machine format for ingestion.
+- Default logging mode is file‑only. To send logs to a remote syslog server, set `LoggingConfig.Mode` to `Syslog` or `Both` and configure `SyslogServer`/`SyslogPort`.
+- Rotation is not handled by the script. For long‑running systems, use external rotation (e.g., logrotate) or periodically archive the file.
 
 ## DANGER ZONE — Managed users removal
 

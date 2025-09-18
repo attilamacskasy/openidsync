@@ -1,20 +1,31 @@
 <#
- OpenIdSync.Logging.ps1
+ 50_OpenIDSync_Logging.ps1
  RFC 5424 syslog logging functions for OpenIDSync scripts.
  Dot-source this file in scripts that require structured logging.
 #>
 
 function Initialize-Logger {
     param(
-        [Parameter(Mandatory=$true)][string]$FilePath,
+        [string]$FilePath,
         [string]$AppName = 'openidsync',
         [ValidateSet('KERN','USER','MAIL','DAEMON','AUTH','SYSLOG','LPR','NEWS','UUCP','CRON','AUTHPRIV','FTP','NTP','SECURITY','CONSOLE','SOLARIS-CRON','LOCAL0','LOCAL1','LOCAL2','LOCAL3','LOCAL4','LOCAL5','LOCAL6','LOCAL7')]
         [string]$Facility = 'LOCAL0',
         [string]$SyslogServer,
         [int]$SyslogPort = 514,
+        [ValidateSet('File','Syslog','Both')][string]$Mode = 'File',
         [switch]$EnableNetwork,
         [switch]$EnableJson
     )
+    # Back-compat: if EnableNetwork is set but Mode not specified explicitly, flip to Syslog
+    if ($EnableNetwork -and -not $PSBoundParameters.ContainsKey('Mode')) { $Mode = 'Syslog' }
+    # Determine mode booleans
+    $fileEnabled = ($Mode -eq 'File' -or $Mode -eq 'Both')
+    $netEnabled  = ($Mode -eq 'Syslog' -or $Mode -eq 'Both' -or $EnableNetwork)
+    # If file logging enabled and no FilePath provided, compute a default in CWD
+    if ($fileEnabled -and [string]::IsNullOrWhiteSpace($FilePath)) {
+        $ts = Get-Date -Format 'yyyyMMdd_HHmmss'
+        $FilePath = Join-Path -Path (Get-Location) -ChildPath ("openidsync_${ts}.log")
+    }
     $script:Logger = @{
         FilePath     = $FilePath
         AppName      = $AppName
@@ -24,11 +35,13 @@ function Initialize-Logger {
         Facility     = $null
         UdpClient    = $null
         RemoteEP     = $null
-        NetEnabled   = [bool]$EnableNetwork
+        FileEnabled  = [bool]$fileEnabled
+        NetEnabled   = [bool]$netEnabled
         JsonEnabled  = [bool]$EnableJson
+        Mode         = $Mode
     }
     $script:Logger.Facility = (Get-SyslogFacility -Name $Facility)
-    if ($EnableNetwork -and $SyslogServer) {
+    if ($script:Logger.NetEnabled -and $SyslogServer) {
         try {
             $client = New-Object System.Net.Sockets.UdpClient
             $addr = $null
@@ -113,8 +126,9 @@ function Write-Syslog {
         [string]$MsgId = '-',
         [hashtable]$Data
     )
+    # Machine line (RFC 5424) for file/syslog
     $line = New-SyslogLine -Message $Message -Level $Level -MsgId $MsgId -Data $Data
-    if ($script:Logger -and $script:Logger.FilePath) {
+    if ($script:Logger -and $script:Logger.FileEnabled -and $script:Logger.FilePath) {
         try { [System.IO.File]::AppendAllText($script:Logger.FilePath, $line + [Environment]::NewLine, [System.Text.Encoding]::UTF8) } catch {}
     }
     if ($script:Logger -and $script:Logger.NetEnabled -and $script:Logger.UdpClient -and $script:Logger.RemoteEP) {
@@ -123,7 +137,28 @@ function Write-Syslog {
             [void]$script:Logger.UdpClient.Send($bytes, $bytes.Length, $script:Logger.RemoteEP)
         } catch {}
     }
-    Write-Host $line
+    
+    # Human-readable console line
+    $tsHuman = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff zzz')
+    $kv = ''
+    if ($Data -and $Data.Count -gt 0) {
+        $pairs = @()
+        foreach ($k in $Data.Keys) {
+            $pairs += ("{0}={1}" -f [string]$k, [string]$Data[$k])
+        }
+        $kv = ' | ' + ($pairs -join ' ')
+    }
+    $human = ("{0} [{1}] {2}{3}" -f $tsHuman, $Level, $Message, $kv)
+    $color = switch ($Level.ToUpper()) {
+        'ERROR' { 'Red' }
+        'WARN' { 'Yellow' }
+        'PROMPT' { 'Cyan' }
+        'ACTION' { 'Magenta' }
+        'RESULT' { 'Green' }
+        'DEBUG' { 'DarkGray' }
+        default { 'White' }
+    }
+    try { Write-Host $human -ForegroundColor $color } catch { Write-Host $human }
 }
 
 function Write-Log {
@@ -134,4 +169,13 @@ function Write-Log {
         [hashtable]$Data
     )
     Write-Syslog -Message $Message -Level $Level -MsgId $MsgId -Data $Data
+}
+
+function Close-Logger {
+    try {
+        if ($script:Logger -and $script:Logger.UdpClient) {
+            $script:Logger.UdpClient.Close()
+        }
+    } catch {}
+    try { Remove-Variable -Name Logger -Scope Script -ErrorAction SilentlyContinue } catch {}
 }
