@@ -3,6 +3,37 @@
 . $PSScriptRoot\..\logging\Write-Log.ps1
 . $PSScriptRoot\..\ad\ActiveDirectory.ps1
 
+function Remove-Diacritics {
+    param([Parameter(Mandatory=$true)][string]$InputString)
+    # Normalize to FormD and strip non-spacing marks, then normalize back
+    $formD = $InputString.Normalize([System.Text.NormalizationForm]::FormD)
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($ch in $formD.ToCharArray()) {
+        $cat = [System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($ch)
+        if ($cat -ne [System.Globalization.UnicodeCategory]::NonSpacingMark) { [void]$sb.Append($ch) }
+    }
+    return $sb.ToString().Normalize([System.Text.NormalizationForm]::FormC)
+}
+
+function Convert-DisplayNameToSam {
+    param(
+        [Parameter(Mandatory=$true)][string]$DisplayName,
+        [string]$Prefix = ''
+    )
+    $name = Remove-Diacritics -InputString $DisplayName
+    # Replace whitespace with underscore
+    $name = ($name -replace '\s+', '_')
+    # Keep only safe ASCII characters
+    $name = $name -replace "[^A-Za-z0-9_\-\.]", ''
+    # Prepend prefix
+    $sam = "$Prefix$name"
+    # Trim to sAMAccountName limit (20)
+    if ($sam.Length -gt 20) { $sam = $sam.Substring(0,20) }
+    # Ensure not empty
+    if ([string]::IsNullOrWhiteSpace($sam)) { $sam = 'Group_' + ([Guid]::NewGuid().ToString('N').Substring(0,6)) }
+    return $sam
+}
+
 function Get-AdGroupBySamOrName {
     param([string]$Name)
     if ([string]::IsNullOrWhiteSpace($Name)) { return $null }
@@ -20,8 +51,7 @@ function New-ADGroupIfMissing {
         [string]$M365Prefix = 'Team_'
     )
     $prefix = switch ($Kind) { 'Security' { $SecurityPrefix } 'M365' { $M365Prefix } default { '' } }
-    $samBase = "$prefix$DisplayName" -replace '[^A-Za-z0-9_\-\.]','_'
-    if ($samBase.Length -gt 20) { $samBase = $samBase.Substring(0,20) }
+    $samBase = Convert-DisplayNameToSam -DisplayName $DisplayName -Prefix $prefix
     $existing = Get-AdGroupBySamOrName -Name $samBase
     if ($existing) { Write-Log -Level 'INFO' -Message ("AD Group exists: {0}" -f $existing.SamAccountName); return ([pscustomobject]@{ Group = $existing; Created = $false }) }
 

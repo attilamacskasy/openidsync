@@ -484,6 +484,10 @@ $script:Summary = [ordered]@{
     SkippedAdministrator = 0
     FailedCreate = 0
     FailedUpdate = 0
+    GroupsCreated = 0
+    GroupsExisting = 0
+    GroupMembersAdded = 0
+    GroupMembersRemoved = 0
 }
 
 # Ensure AD module present right before processing users
@@ -518,7 +522,10 @@ if ($Source -eq 'Online' -and -not $script:QuitRequested) {
         $groupMap = @{}
         foreach ($g in $groups) {
             $res = New-ADGroupIfMissing -DisplayName $g.DisplayName -Kind $g.Kind -TargetOU $DefaultOU
-            if ($res -and $res.Group) { $groupMap[$g.Id] = $res.Group }
+            if ($res -and $res.Group) {
+                $groupMap[$g.Id] = $res.Group
+                if ($res.Created) { $script:Summary['GroupsCreated']++ } else { $script:Summary['GroupsExisting']++ }
+            }
         }
         Write-Log -Level 'ACTION' -Message 'Reconciling group memberships...'
         foreach ($g in $groups) {
@@ -526,7 +533,11 @@ if ($Source -eq 'Online' -and -not $script:QuitRequested) {
             $targetG = $groupMap[$g.Id]
             $memberUpns = Get-EntraGroupMembersViaGraph -GroupId $g.Id
             $mres = Set-AdGroupMemberships -Group $targetG -MemberUpns $memberUpns
-            if ($mres) { Write-Log -Level 'INFO' -Message ("Memberships set for {0}: +{1}/-{2}" -f $targetG.SamAccountName, $mres.Added, $mres.Removed) }
+            if ($mres) {
+                Write-Log -Level 'INFO' -Message ("Memberships set for {0}: +{1}/-{2}" -f $targetG.SamAccountName, $mres.Added, $mres.Removed)
+                $script:Summary['GroupMembersAdded'] += [int]$mres.Added
+                $script:Summary['GroupMembersRemoved'] += [int]$mres.Removed
+            }
         }
     } catch { Write-Log -Level 'ERROR' -Message ("Group sync failed: {0}" -f $_.Exception.Message) }
 }
