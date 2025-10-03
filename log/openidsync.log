@@ -1,0 +1,31 @@
+﻿<134>1 2025-10-03T14:30:25.952+02:00 DESKTOP-FDJQB7I openidsync 31908 - - Logging initialized: Mode=File, File=C:\Users\Attila\Desktop\Code\openidsync\log\openidsync.log, Syslog=-:514
+<134>1 2025-10-03T14:30:25.980+02:00 DESKTOP-FDJQB7I openidsync 31908 - - MaximumFunctionCount in use: 4096
+<134>1 2025-10-03T14:30:25.997+02:00 DESKTOP-FDJQB7I openidsync 31908 - - Source: Online (Microsoft Graph)
+<134>1 2025-10-03T14:30:26.000+02:00 DESKTOP-FDJQB7I openidsync 31908 - - Default OU: CN=Users,DC=example,DC=com
+<134>1 2025-10-03T14:30:26.114+02:00 DESKTOP-FDJQB7I openidsync 31908 - - Tenant license plan detected: Unknown (Premium features: No)
+<131>1 2025-10-03T14:30:26.153+02:00 DESKTOP-FDJQB7I openidsync 31908 - - Online fetch failed: The term 'Get-EntraUsersViaGraph' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+<134>1 2025-10-03T14:32:19.511+02:00 DESKTOP-FDJQB7I openidsync 37996 - - Logging initialized: Mode=File, File=C:\Users\Attila\Desktop\Code\openidsync\log\openidsync.log, Syslog=-:514
+<134>1 2025-10-03T14:32:19.543+02:00 DESKTOP-FDJQB7I openidsync 37996 - - MaximumFunctionCount in use: 4096
+<134>1 2025-10-03T14:32:19.565+02:00 DESKTOP-FDJQB7I openidsync 37996 - - Source: Online (Microsoft Graph)
+<134>1 2025-10-03T14:32:19.570+02:00 DESKTOP-FDJQB7I openidsync 37996 - - Default OU: CN=Users,DC=example,DC=com
+<134>1 2025-10-03T14:32:19.723+02:00 DESKTOP-FDJQB7I openidsync 37996 - - Tenant license plan detected: Unknown (Premium features: No)
+<131>1 2025-10-03T14:32:19.772+02:00 DESKTOP-FDJQB7I openidsync 37996 - - Online fetch failed: The term 'Get-EntraUsersViaGraph' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+<134>1 2025-10-03T14:33:08.867+02:00 DESKTOP-FDJQB7I openidsync 28520 - - Logging initialized: Mode=File, File=C:\Users\Attila\Desktop\Code\openidsync\log\openidsync.log, Syslog=-:514
+<134>1 2025-10-03T14:33:08.880+02:00 DESKTOP-FDJQB7I openidsync 28520 - - MaximumFunctionCount in use: 4096
+<134>1 2025-10-03T14:33:08.906+02:00 DESKTOP-FDJQB7I openidsync 28520 - - Source: Online (Microsoft Graph)
+<134>1 2025-10-03T14:33:08.909+02:00 DESKTOP-FDJQB7I openidsync 28520 - - Default OU: CN=Users,DC=example,DC=com
+<134>1 2025-10-03T14:33:09.042+02:00 DESKTOP-FDJQB7I openidsync 28520 - - Tenant license plan detected: Unknown (Premium features: No)
+<131>1 2025-10-03T14:33:09.090+02:00 DESKTOP-FDJQB7I openidsync 28520 - - Online fetch failed: The term 'Get-EntraUsersViaGraph' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+<134>1 2025-10-03T14:33:41.280+02:00 DESKTOP-FDJQB7I openidsync 42648 - - Logging initialized: Mode=File, File=C:\Users\Attila\Desktop\Code\openidsync\log\openidsync.log, Syslog=-:514
+<134>1 2025-10-03T14:33:41.312+02:00 DESKTOP-FDJQB7I openidsync 42648 - - MaximumFunctionCount in use: 32768
+<134>1 2025-10-03T14:33:41.343+02:00 DESKTOP-FDJQB7I openidsync 42648 - - Online onboarding flow:
+<134>1 2025-10-03T14:33:41.347+02:00 DESKTOP-FDJQB7I openidsync 42648 - - 1) Delegated sign-in (interactive) - first run
+<134>1 2025-10-03T14:33:41.350+02:00 DESKTOP-FDJQB7I openidsync 42648 - - 2) Create App Registration + Service Principal, print secret; set env var OPENIDSYNC_CLIENT_SECRET
+<134>1 2025-10-03T14:33:41.353+02:00 DESKTOP-FDJQB7I openidsync 42648 - - 3) App-only (Service Principal) - subsequent runs
+<134>1 2025-10-03T14:33:41.353+02:00 DESKTOP-FDJQB7I openidsync 42648 - - Status: No App Registration found in OnlineSyncConfig. This run will use delegated sign-in.
+<134>1 2025-10-03T14:33:41.353+02:00 DESKTOP-FDJQB7I openidsync 42648 - - Tip: Add -AutoInstallGraphModules and optionally -AutoCreateGraphApp to create the app now.
+<134>1 2025-10-03T14:33:41.364+02:00 DESKTOP-FDJQB7I openidsync 42648 - - Online sync IDs file: C:\Users\Attila\Desktop\Code\openidsync\00_OpenIDSync_OnlineSyncConfig.json
+<134>1 2025-10-03T14:33:41.367+02:00 DESKTOP-FDJQB7I openidsync 42648 - - Reset cached tokens if switching modes: .\98_Reset_Azure_Login_Session.ps1
+<134>1 2025-10-03T14:33:41.370+02:00 DESKTOP-FDJQB7I openidsync 42648 - - Source: Online (Microsoft Graph)
+<134>1 2025-10-03T14:33:41.372+02:00 DESKTOP-FDJQB7I openidsync 42648 - - Default OU: CN=Users,DC=example,DC=com
+<131>1 2025-10-03T14:33:57.209+02:00 DESKTOP-FDJQB7I openidsync 42648 - - Online fetch failed: Missing Graph modules (see Microsoft.Graph.Authentication Microsoft.Graph.Users Microsoft.Graph.Applications Microsoft.Graph.Identity.DirectoryManagement Microsoft.Graph.Groups list)
