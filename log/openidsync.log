@@ -29,3 +29,18 @@
 <134>1 2025-10-03T14:33:41.370+02:00 DESKTOP-FDJQB7I openidsync 42648 - - Source: Online (Microsoft Graph)
 <134>1 2025-10-03T14:33:41.372+02:00 DESKTOP-FDJQB7I openidsync 42648 - - Default OU: CN=Users,DC=example,DC=com
 <131>1 2025-10-03T14:33:57.209+02:00 DESKTOP-FDJQB7I openidsync 42648 - - Online fetch failed: Missing Graph modules (see Microsoft.Graph.Authentication Microsoft.Graph.Users Microsoft.Graph.Applications Microsoft.Graph.Identity.DirectoryManagement Microsoft.Graph.Groups list)
+<134>1 2025-10-03T15:06:50.301+02:00 DESKTOP-FDJQB7I openidsync 3416 - - Logging initialized: Mode=File, File=C:\Users\Attila\Desktop\Code\openidsync\log\openidsync.log, Syslog=-:514
+<134>1 2025-10-03T15:06:50.351+02:00 DESKTOP-FDJQB7I openidsync 3416 - - MaximumFunctionCount in use: 32768
+<134>1 2025-10-03T15:06:50.386+02:00 DESKTOP-FDJQB7I openidsync 3416 - - Online onboarding flow:
+<134>1 2025-10-03T15:06:50.389+02:00 DESKTOP-FDJQB7I openidsync 3416 - - 1) Delegated sign-in (interactive) - first run
+<134>1 2025-10-03T15:06:50.392+02:00 DESKTOP-FDJQB7I openidsync 3416 - - 2) Create App Registration + Service Principal, print secret; set env var OPENIDSYNC_CLIENT_SECRET
+<134>1 2025-10-03T15:06:50.395+02:00 DESKTOP-FDJQB7I openidsync 3416 - - 3) App-only (Service Principal) - subsequent runs
+<134>1 2025-10-03T15:06:50.397+02:00 DESKTOP-FDJQB7I openidsync 3416 - - Status: No App Registration found in OnlineSyncConfig. This run will use delegated sign-in.
+<134>1 2025-10-03T15:06:50.403+02:00 DESKTOP-FDJQB7I openidsync 3416 - - Tip: Add -AutoInstallGraphModules and optionally -AutoCreateGraphApp to create the app now.
+<134>1 2025-10-03T15:06:50.407+02:00 DESKTOP-FDJQB7I openidsync 3416 - - Online sync IDs file: C:\Users\Attila\Desktop\Code\openidsync\00_OpenIDSync_OnlineSyncConfig.json
+<134>1 2025-10-03T15:06:50.410+02:00 DESKTOP-FDJQB7I openidsync 3416 - - Reset cached tokens if switching modes: .\98_Reset_Azure_Login_Session.ps1
+<134>1 2025-10-03T15:06:50.413+02:00 DESKTOP-FDJQB7I openidsync 3416 - - Source: Online (Microsoft Graph)
+<134>1 2025-10-03T15:06:50.415+02:00 DESKTOP-FDJQB7I openidsync 3416 - - Default OU: OU=Sync,DC=example,DC=com
+<133>1 2025-10-03T15:06:50.518+02:00 DESKTOP-FDJQB7I openidsync 3416 - - Attempting to install Microsoft Graph PowerShell submodules for current user...
+<131>1 2025-10-03T15:07:07.772+02:00 DESKTOP-FDJQB7I openidsync 3416 - - Failed to install Microsoft Graph submodules: Administrator rights are required to install packages in ''. Log on to the computer with an account that has Administrator rights, and then try again, or install in 'C:\Users\Attila\AppData\Local\PackageManagement\ProviderAssemblies' by adding "-Scope CurrentUser" to your command. You can also try running the Windows PowerShell session with elevated rights (Run as Administrator).
+<131>1 2025-10-03T15:07:07.780+02:00 DESKTOP-FDJQB7I openidsync 3416 - - Online fetch failed: Missing Graph modules (see Microsoft.Graph.Authentication Microsoft.Graph.Users Microsoft.Graph.Applications Microsoft.Graph.Identity.DirectoryManagement Microsoft.Graph.Groups list)

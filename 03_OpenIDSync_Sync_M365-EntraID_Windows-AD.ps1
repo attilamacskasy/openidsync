@@ -43,7 +43,8 @@ try {
             (Join-Path (Join-Path $modulesRoot 'sync-sources') 'CSV.ps1'),
             (Join-Path (Join-Path $modulesRoot 'sync-sources') 'Providers.ps1'),
             (Join-Path (Join-Path $modulesRoot 'microsoft-graph') 'Graph.ps1'),
-            (Join-Path (Join-Path $modulesRoot 'sync-targets') 'WindowsAD.ps1')
+            (Join-Path (Join-Path $modulesRoot 'sync-targets') 'WindowsAD.ps1'),
+            (Join-Path (Join-Path $modulesRoot 'sync-targets') 'WindowsAD.Groups.ps1')
         )
         foreach ($mf in $moduleFiles) {
             if (Test-Path -LiteralPath $mf) {
@@ -506,6 +507,28 @@ foreach ($row in $rows) {
         Write-Log -Level 'INFO' -Message 'Quit requested by user. Stopping import.'
         break
     }
+}
+
+# Groups and memberships (Online source only)
+if ($Source -eq 'Online' -and -not $script:QuitRequested) {
+    try {
+        Write-Log -Level 'ACTION' -Message 'Reconciling groups from Entra to AD...'
+        $groups = Get-EntraGroupsViaGraph
+        Write-Log -Level 'INFO' -Message ("Groups to reconcile: {0}" -f $groups.Count)
+        $groupMap = @{}
+        foreach ($g in $groups) {
+            $res = New-ADGroupIfMissing -DisplayName $g.DisplayName -Kind $g.Kind -TargetOU $DefaultOU
+            if ($res -and $res.Group) { $groupMap[$g.Id] = $res.Group }
+        }
+        Write-Log -Level 'ACTION' -Message 'Reconciling group memberships...'
+        foreach ($g in $groups) {
+            if (-not $groupMap.ContainsKey($g.Id)) { continue }
+            $targetG = $groupMap[$g.Id]
+            $memberUpns = Get-EntraGroupMembersViaGraph -GroupId $g.Id
+            $mres = Set-AdGroupMemberships -Group $targetG -MemberUpns $memberUpns
+            if ($mres) { Write-Log -Level 'INFO' -Message ("Memberships set for {0}: +{1}/-{2}" -f $targetG.SamAccountName, $mres.Added, $mres.Removed) }
+        }
+    } catch { Write-Log -Level 'ERROR' -Message ("Group sync failed: {0}" -f $_.Exception.Message) }
 }
 
 # Suggest removals (not deleting, only suggesting)

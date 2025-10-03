@@ -69,7 +69,7 @@ function Import-GraphModules {
 
 function Test-GraphCommands {
     $cmds = @(
-        'Connect-MgGraph','Get-MgContext','Get-MgUser','Get-MgGroup',
+        'Connect-MgGraph','Get-MgContext','Get-MgUser','Get-MgGroup','Get-MgGroupMember','Get-MgGroupTransitiveMember',
         'New-MgApplication','Add-MgApplicationPassword','New-MgServicePrincipal','Get-MgServicePrincipal','New-MgServicePrincipalAppRoleAssignment',
         'Get-MgDirectoryRole','Get-MgDirectoryRoleTemplate','New-MgDirectoryRole','New-MgDirectoryRoleMemberByRef'
     )
@@ -395,6 +395,80 @@ function Get-EntraUsersViaGraph {
     }
     Write-Log -Level 'RESULT' -Message ("Entra users fetched: {0}" -f $rows.Count)
     return $rows
+}
+
+# Fetch Entra ID groups with minimal properties to categorize type
+function Get-EntraGroupsViaGraph {
+    Import-GraphModules
+    Test-GraphCommands
+    $connected = $false
+    try { $ctx = Get-MgContext } catch { $ctx = $null }
+    if ($ctx) { $connected = $true } else { $connected = Connect-GraphDelegated -Scopes @('Group.Read.All','Directory.Read.All') }
+    if (-not $connected) { throw "Unable to connect to Microsoft Graph for groups." }
+
+    Write-Log -Level 'ACTION' -Message 'Querying Entra ID groups via Microsoft Graph...'
+    $groups = Get-MgGroup -All -Property id,displayName,mailEnabled,securityEnabled,groupTypes -ErrorAction Stop
+    $rows = @()
+    foreach ($g in $groups) {
+        $isUnified = $false
+        try { if ($g.GroupTypes -and ($g.GroupTypes -contains 'Unified')) { $isUnified = $true } } catch {}
+        $kind = if ($isUnified) { 'M365' } elseif ($g.SecurityEnabled) { 'Security' } else { 'Other' }
+        $rows += [pscustomobject]@{
+            Id = [string]$g.Id
+            DisplayName = [string]$g.DisplayName
+            MailEnabled = [bool]$g.MailEnabled
+            SecurityEnabled = [bool]$g.SecurityEnabled
+            GroupTypes = @($g.GroupTypes)
+            Kind = $kind
+        }
+    }
+    Write-Log -Level 'RESULT' -Message ("Entra groups fetched: {0}" -f $rows.Count)
+    return $rows
+}
+
+# Fetch user UPNs for a given group
+function Get-EntraGroupMembersViaGraph {
+    param([Parameter(Mandatory=$true)][string]$GroupId)
+    Import-GraphModules
+    Test-GraphCommands
+    $connected = $false
+    try { $ctx = Get-MgContext } catch { $ctx = $null }
+    if ($ctx) { $connected = $true } else { $connected = Connect-GraphDelegated -Scopes @('Group.Read.All','Directory.Read.All') }
+    if (-not $connected) { throw "Unable to connect to Microsoft Graph for group members." }
+
+    $upns = @()
+    try {
+        $members = Get-MgGroupMember -GroupId $GroupId -All -ErrorAction Stop
+        foreach ($m in $members) {
+            $t = $null; try { $t = $m.AdditionalProperties['@odata.type'] } catch {}
+            if ($t -and $t -eq '#microsoft.graph.user') {
+                $upn = $null
+                try { $upn = [string]$m.AdditionalProperties['userPrincipalName'] } catch {}
+                if (-not $upn) {
+                    try { $u = Get-MgUser -UserId $m.Id -ErrorAction Stop; if ($u) { $upn = [string]$u.UserPrincipalName } } catch {}
+                }
+                if ($upn) { $upns += $upn }
+            }
+        }
+    } catch {
+        Write-Log -Level 'WARN' -Message "Failed to enumerate members for group $GroupId via single call, attempting transitive API."
+        try {
+            $members2 = Get-MgGroupTransitiveMember -GroupId $GroupId -All -ErrorAction Stop
+            foreach ($m in $members2) {
+                $t = $null; try { $t = $m.AdditionalProperties['@odata.type'] } catch {}
+                if ($t -and $t -eq '#microsoft.graph.user') {
+                    $upn = $null
+                    try { $upn = [string]$m.AdditionalProperties['userPrincipalName'] } catch {}
+                    if (-not $upn) {
+                        try { $u = Get-MgUser -UserId $m.Id -ErrorAction Stop; if ($u) { $upn = [string]$u.UserPrincipalName } } catch {}
+                    }
+                    if ($upn) { $upns += $upn }
+                }
+            }
+        } catch {}
+    }
+    $upns = $upns | Sort-Object -Unique
+    return $upns
 }
 
 # Note: This is a dot-sourced script, not a module. Do not export members here.
