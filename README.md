@@ -14,6 +14,14 @@ Purpose: Spin up a new on‑premises Active Directory forest and interactively s
 - New: Online (Graph API) mode to pull users directly from Entra ID; optional first‑time App Registration creation; CSV mode remains available.
 - New safety tool: `04_DANGER_Remove_OpenIDSync_Managed_Users.ps1` deletes only users previously created/managed by this tool (those with `[openidsync.org]` in `description`). Includes red‑banner warnings, double confirmation, `-WhatIf`, `-Force`, and automatic backup CSV.
 
+- Source selection & unattended mode:
+	- New numeric source selector: `1 - Online` (default) or `2 - CSV`.
+	- New `-NonInteractive` switch for scheduled runs; combines well with `-AllUsers` to process every user without prompts.
+	- `-NonInteractive` requires a defined source: either pass `-Source Online|CSV` or set `UserSyncConfig.PreferredSource` in `00_OpenIDSync_Config.json`. If missing, the script stops with guidance.
+	- `PreferredSource` moved into the main config under `UserSyncConfig` (removed from the online config file).
+
+- App creation permissions: First‑run app creation now requests Graph Application permissions `User.Read.All` and `Directory.Read.All` and attempts to grant admin consent programmatically.
+
 - Logging enhancements:
 	- Structured logging module with three modes: `File`, `Syslog` (UDP), or `Both`.
 	- Human‑readable console output; file and syslog keep RFC 5424 machine format.
@@ -43,7 +51,7 @@ Set-Location "c:\Users\Attila\Desktop\Code\openidsync"
 setx OPENIDSYNC_CLIENT_SECRET "<YOUR-SECRET-HERE>"
 ```
 
-4) In the Azure portal: grant admin consent for Microsoft Graph `User.Read.All` (Application)
+4) In the Azure portal: grant admin consent for Microsoft Graph `User.Read.All` and `Directory.Read.All` (Application)
 - Navigate: App registrations → your app (e.g., `OpenIDSync_org__Entra_Sync_Windows_AD`) → `API permissions`.
 - Click `Grant admin consent for <your tenant>` (see screenshot in this repo).
 - Requires a privileged admin (Global Administrator or Privileged Role Administrator).
@@ -65,10 +73,23 @@ If you need to clear cached tokens before switching auth contexts, run:
 ./98_Reset_Azure_Login_Session.ps1
 ```
 
+6) Unattended/scheduled runs (non‑interactive)
+```powershell
+# Online (App-only) — ensure the client secret env var exists for the scheduled account
+./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -NonInteractive -AllUsers -Source Online -DefaultOU "CN=Users,DC=contoso,DC=local"
+
+# CSV
+./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -NonInteractive -AllUsers -Source CSV -CsvPath ".\users.csv" -DefaultOU "CN=Users,DC=contoso,DC=local"
+```
+Notes for non‑interactive:
+- If `-Source` isn’t passed and `UserSyncConfig.PreferredSource` isn’t set, the script will stop with guidance to set it (recommended: `Online`).
+- `-AutoCreateGraphApp` requires an interactive sign‑in and cannot be combined with `-NonInteractive`.
+- When missing Graph modules, `-NonInteractive` will auto‑install the required Microsoft Graph submodules for the current user.
+
 ## First-time use (safe, least-privilege) — detailed steps
 
 This tool is designed to be safe and transparent:
-- Read-only in Entra ID: The app gets only Microsoft Graph `User.Read.All` (Application).
+- Read-only in Entra ID: The app gets Microsoft Graph `User.Read.All` and `Directory.Read.All` (Application).
 - Optional Directory Readers: You may assign the built‑in `Directory Readers` directory role to the app’s service principal (no write permissions; optional for audit posture).
 - Clear credential visibility: Every run prints an "Authentication Context Used" block so you always see whether the script uses your user (Delegated) or the app (App-only), along with IDs.
 
@@ -85,7 +106,7 @@ setx OPENIDSYNC_CLIENT_SECRET "<YOUR-SECRET-HERE>"
 
 Step 2 — Grant admin consent in the Azure portal
 1. Open App registrations → your app → API permissions.
-2. Click `Grant admin consent for <your tenant>` for Microsoft Graph `User.Read.All` (Application).
+2. Click `Grant admin consent for <your tenant>` for Microsoft Graph `User.Read.All` and `Directory.Read.All` (Application).
 3. This step requires a privileged admin (Global Administrator or Privileged Role Administrator).
 
 Step 3 — Use App-only on the next run
@@ -98,7 +119,7 @@ Step 3 — Use App-only on the next run
 
 ## Why this is safe (least privilege by design)
 
-- Least privilege: Only Graph `User.Read.All` (Application) is granted to the app. The script never writes to Entra ID.
+- Least privilege: Only Graph read-only application permissions are granted to the app: `User.Read.All` and `Directory.Read.All`. The script never writes to Entra ID.
 - Transparent auth: The script prints which identity is used (App/SP or Delegated) with names and IDs.
 - No secrets on disk: The client secret is never written to files. You provide it via an environment variable (default `OPENIDSYNC_CLIENT_SECRET`).
 - Auditable actions: A timestamped audit log and a credentials CSV (for new AD users) are written to the working directory.
@@ -130,6 +151,7 @@ Step 3 — Use App-only on the next run
 - `UserSyncConfig`:
 	- `CsvPath` (string): Path to the Microsoft 365 users CSV export.
 	- `DefaultOU` (DN): Distinguished Name where new users are created (and where suggestions/cleanup operate).
+	- `PreferredSource` (string): Default source when `-Source` isn’t provided. `Online` (recommended) or `CSV`.
 	- `SuggestRemovals` (bool): If true, after import it lists AD users with a `mail` attribute in the target OU that are not present in the CSV and are not managed by this tool (it never deletes).
 	- `SkipUserBasedOnDisplayName` (array of strings): Substrings that, if found in `Display name`, skip processing that row. Defaults if omitted: `(Archive)`, `(Temp)`.
 	- `SkipUserBasedOnUserPrincipalName` (array of strings): Substrings that, if found in UPN, skip processing that row. Defaults if omitted: `#EXT#`, `Temporary`. Additionally, base substrings `archiv` and `temp` are always enforced even if not listed, and all matching is case‑insensitive.
@@ -145,7 +167,6 @@ Step 3 — Use App-only on the next run
 	- `TenantId` (string): Entra ID tenant ID.
 	- `ClientId` (string): App Registration (application) ID.
 	- `SpObjectId` (string): Service principal object id.
-	- `PreferredSource` (string): `CSV` or `Online` default when not provided via CLI.
 	- `ClientSecretEnvVar` (string): Environment variable name used to read the client secret (default `OPENIDSYNC_CLIENT_SECRET`).
 
 Important: The online sync IDs are only persisted in `00_OpenIDSync_OnlineSyncConfig.json`. The main config `00_OpenIDSync_Config.json` is never auto‑modified by the online sync code.
@@ -172,6 +193,7 @@ Example JSON (trimmed):
 	"UserSyncConfig": {
 		"CsvPath": ".\\users.csv",
 		"DefaultOU": "CN=Users,DC=contoso,DC=local",
+		"PreferredSource": "Online",
 		"SuggestRemovals": true,
 		"SkipUserBasedOnDisplayName": ["(Archive)", "(Temp)"],
 		"SkipUserBasedOnUserPrincipalName": ["#EXT#", "Temporary"]
@@ -187,7 +209,6 @@ And the separate online sync config file `00_OpenIDSync_OnlineSyncConfig.json`:
 		"TenantId": "00000000-0000-0000-0000-000000000000",
 		"ClientId": "11111111-1111-1111-1111-111111111111",
 		"SpObjectId": "22222222-2222-2222-2222-222222222222",
-		"PreferredSource": "Online",
 		"ClientSecretEnvVar": "OPENIDSYNC_CLIENT_SECRET"
 	}
 }
@@ -209,6 +230,8 @@ And the separate online sync config file `00_OpenIDSync_OnlineSyncConfig.json`:
 - Reads users from either:
   - Online: Microsoft Graph (Entra ID) — App‑only or delegated connection
   - CSV: Microsoft 365 Admin “Active users” export
+	- Interactive runs: you’ll see a numeric menu `1 - Online` / `2 - CSV` if `-Source` isn’t passed and no default is set.
+	- Non‑interactive runs: require `-Source` or `UserSyncConfig.PreferredSource`.
 - Interactive per‑user preview with `[Y]es/[N]o/[A]ll/[Q]uit` prompt
 - Idempotent updates by email (AD `mail` or `proxyAddresses`); creates users when missing
 - Skip logic before any prompts:
@@ -226,12 +249,12 @@ Details & compatibility notes:
 - The end‑of‑run summary table prints to console and is recorded in the audit log.
 
 Graph prerequisites:
-- For Online mode with existing App Registration: assign Microsoft Graph Application permission `User.Read.All` and grant admin consent. Provide `TenantId`, `ClientId`, and set the secret via env var.
-- For `-AutoCreateGraphApp`: sign in with delegated scopes `Application.ReadWrite.All` and `Directory.ReadWrite.All` to create an app, service principal, client secret, and attempt to grant `User.Read.All`. If consent fails (e.g., Entra Free or insufficient privileges), grant it later in the portal.
+- For Online mode with existing App Registration: assign Microsoft Graph Application permissions `User.Read.All` and `Directory.Read.All` and grant admin consent. Provide `TenantId`, `ClientId`, and set the secret via env var.
+- For `-AutoCreateGraphApp`: sign in with delegated scopes `Application.ReadWrite.All` and `Directory.ReadWrite.All` to create an app, service principal, client secret, and attempt to grant `User.Read.All` and `Directory.Read.All`. If consent fails (e.g., Entra Free or insufficient privileges), grant it later in the portal.
 - `-AssignDirectoryReaderToApp` (optional): assigns the built-in directory role "Directory Readers" to your app's service principal. Requires delegated admin capable of role assignments (e.g., Privileged Role Administrator or Global Administrator). This does not grant write capabilities; it's optional.
 
 Security notes for auditors:
-- App-only runs are strictly read-only against Microsoft Graph. Only `User.Read.All` (Application) is granted.
+- App-only runs are strictly read-only against Microsoft Graph. `User.Read.All` and `Directory.Read.All` (Application) are granted.
 - If you choose to assign Directory Readers via `-AssignDirectoryReaderToApp`, the delegated sign-in will request `RoleManagement.ReadWrite.Directory` to perform the one-time role assignment; this is not needed for normal syncing.
 
 Graph modules (PowerShell 5.1):

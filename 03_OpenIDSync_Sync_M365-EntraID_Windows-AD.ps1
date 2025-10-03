@@ -3,6 +3,10 @@
     [string]$DefaultOU,
     [ValidateSet('CSV','Online')]
     [string]$Source,
+    [Alias('Batch','NoPrompt')]
+    [switch]$NonInteractive,
+    [Alias('All','ProcessAll')]
+    [switch]$AllUsers,
     [switch]$NoSuggestRemovals,
     # Graph/App Registration overrides (optional)
     [string]$TenantId,
@@ -20,6 +24,9 @@
 # Make config paths available script-wide
 $script:ConfigPath = $ConfigPath
 $script:OnlineSyncConfigPath = $OnlineSyncConfigPath
+$script:NonInteractive = $false
+$script:ProcessAll = $false
+$script:SourceFromConfig = $false
 
 # Try to load logging module
 try {
@@ -87,14 +94,22 @@ function Ensure-GraphModule {
     $available = @()
     foreach ($r in $required) { if (Get-Module -ListAvailable -Name $r) { $available += $r } }
     if ($available.Count -lt $required.Count) {
-        if ($script:AutoInstallGraphModules) {
+        if ($script:AutoInstallGraphModules -or $script:NonInteractive) {
             $ok = Install-GraphModule
-            if (-not $ok) { throw 'Missing Graph modules (see $script:GraphModules list)' }
+            if (-not $ok) { throw "Missing Graph modules (see $script:GraphModules list)" }
         } else {
             Write-Host "Microsoft Graph PowerShell is required for Online mode. Required submodules:" -ForegroundColor Yellow
-            Write-Host (" - " + ($required -join "`n - ")) -ForegroundColor Yellow
-            Write-Host "Install with: Install-Module {0} -Scope CurrentUser" -f ($required -join ',') -ForegroundColor Yellow
-            throw "Missing Graph modules (see $script:GraphModules list)"
+            $listText = (" - " + ($required -join "`n - "))
+            Write-Host $listText -ForegroundColor Yellow
+            $installText = ("Install with: Install-Module {0} -Scope CurrentUser" -f ($required -join ','))
+            Write-Host $installText -ForegroundColor Yellow
+            $ans = Read-Host "Install required submodules now? [Y]es/[N]o"
+            if ($ans -match '^(?i:y|yes)$') {
+                $ok = Install-GraphModule
+                if (-not $ok) { throw "Missing Graph modules (see $script:GraphModules list)" }
+            } else {
+                throw "Missing Graph modules (see $script:GraphModules list)"
+            }
         }
     }
     foreach ($m in $required) { Import-Module $m -ErrorAction Stop }
@@ -140,7 +155,6 @@ function Save-OnlineSyncConfig {
         [Parameter(Mandatory=$true)][string]$TenantId,
         [Parameter(Mandatory=$true)][string]$ClientId,
         [string]$SpObjectId,
-        [string]$PreferredSource,
         [string]$ClientSecretEnvVar
     )
     try {
@@ -160,8 +174,7 @@ function Save-OnlineSyncConfig {
         # Assign values (Add-Member -Force updates or creates)
         $osc | Add-Member -NotePropertyName 'TenantId' -NotePropertyValue $TenantId -Force
         $osc | Add-Member -NotePropertyName 'ClientId' -NotePropertyValue $ClientId -Force
-        if ($SpObjectId) { $osc | Add-Member -NotePropertyName 'SpObjectId' -NotePropertyValue $SpObjectId -Force }
-        if ($PreferredSource) { $osc | Add-Member -NotePropertyName 'PreferredSource' -NotePropertyValue $PreferredSource -Force }
+    if ($SpObjectId) { $osc | Add-Member -NotePropertyName 'SpObjectId' -NotePropertyValue $SpObjectId -Force }
         if ($ClientSecretEnvVar) { $osc | Add-Member -NotePropertyName 'ClientSecretEnvVar' -NotePropertyValue $ClientSecretEnvVar -Force }
 
         # Re-attach in case above created a new PSCustomObject
@@ -206,7 +219,7 @@ function Print-SecuritySummary {
     Write-Host ""; Write-Host "==== Entra ID Access & Security Summary ====" -ForegroundColor Cyan
     if ($AppOnly) {
         Write-Host "Mode: App-only (client credential flow)" -ForegroundColor Cyan
-        Write-Host "Permissions: Microsoft Graph Application permission 'User.Read.All' ONLY" -ForegroundColor Cyan
+        Write-Host "Permissions: Microsoft Graph Application permissions 'User.Read.All' and 'Directory.Read.All'" -ForegroundColor Cyan
         Write-Host "Purpose: Read users and their mail/proxy attributes to sync into on-prem AD" -ForegroundColor Cyan
         Write-Host "Writes to Entra ID: None" -ForegroundColor Cyan
     } else {
@@ -214,9 +227,9 @@ function Print-SecuritySummary {
         Write-Host "Permissions requested during sign-in: User.Read.All, Directory.Read.All (read-only)" -ForegroundColor Cyan
     }
     if ($CreatingApp) {
-        Write-Host "App Registration creation: Requires delegated admin to create app & service principal and grant Graph 'User.Read.All' (Application)" -ForegroundColor Yellow
+        Write-Host "App Registration creation: Requires delegated admin to create app & service principal and grant Graph 'User.Read.All' and 'Directory.Read.All' (Application)" -ForegroundColor Yellow
         Write-Host "Suggested admin roles during creation: Cloud Application Administrator and ability to grant admin consent (Privileged Role Administrator or Global Administrator)" -ForegroundColor Yellow
-        Write-Host "Least privilege of created app: ONLY Graph 'User.Read.All' application permission is granted." -ForegroundColor Yellow
+        Write-Host "Least privilege of created app: Graph 'User.Read.All' and 'Directory.Read.All' application permissions are granted." -ForegroundColor Yellow
     }
     Write-Host "Operational note: Client secret is NOT written to disk. Provide it via environment variable (e.g. %OPENIDSYNC_CLIENT_SECRET%)." -ForegroundColor DarkYellow
     Write-Host "==============================================" -ForegroundColor Cyan
@@ -326,17 +339,25 @@ function New-OpenIdSyncGraphApp {
 
     # Microsoft Graph service principal AppId
     $graphAppId = '00000003-0000-0000-c000-000000000000'
-    # App role ID for User.Read.All (Application permission)
+    # App role IDs for required application permissions
+    $graphSpObj = Get-MgServicePrincipal -Filter "appId eq '$graphAppId'" -ErrorAction Stop
     $userReadAllId = (
-        Get-MgServicePrincipal -Filter "appId eq '$graphAppId'" -ErrorAction Stop |
-        Select-Object -ExpandProperty AppRoles |
+        $graphSpObj.AppRoles |
         Where-Object { $_.Value -eq 'User.Read.All' -and $_.AllowedMemberTypes -contains 'Application' }
     ).Id
+    $directoryReadAllId = (
+        $graphSpObj.AppRoles |
+        Where-Object { $_.Value -eq 'Directory.Read.All' -and $_.AllowedMemberTypes -contains 'Application' }
+    ).Id
     if (-not $userReadAllId) { throw "Could not locate Graph app role 'User.Read.All'" }
+    if (-not $directoryReadAllId) { throw "Could not locate Graph app role 'Directory.Read.All'" }
 
     # Create application
     $app = New-MgApplication -DisplayName $DisplayName -SignInAudience 'AzureADMyOrg' -RequiredResourceAccess @(
-        @{ ResourceAppId = $graphAppId; ResourceAccess = @(@{ Id = $userReadAllId; Type = 'Role' }) }
+        @{ ResourceAppId = $graphAppId; ResourceAccess = @(
+            @{ Id = $userReadAllId; Type = 'Role' },
+            @{ Id = $directoryReadAllId; Type = 'Role' }
+        ) }
     ) -ErrorAction Stop
     Write-Log -Level 'ACTION' -Message "Created Azure AD application: $($app.AppId)"
 
@@ -348,13 +369,23 @@ function New-OpenIdSyncGraphApp {
     $appPwdResult = Add-MgApplicationPassword -ApplicationId $app.Id -PasswordCredential @{ displayName = 'client-secret' } -ErrorAction Stop
     $clientSecret = $appPwdResult.SecretText
 
-    # Admin consent: attempt to assign User.Read.All (Application) to the SP on Graph
+    # Admin consent: attempt to assign required application permissions to the SP on Graph
     try {
         $graphSp = Get-MgServicePrincipal -Filter "appId eq '$graphAppId'" -ErrorAction Stop
-        New-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id -PrincipalId $sp.Id -ResourceId $graphSp.Id -AppRoleId $userReadAllId -ErrorAction Stop | Out-Null
-        Write-Log -Level 'RESULT' -Message 'Granted application permission: Microsoft Graph User.Read.All'
+        try {
+            New-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id -PrincipalId $sp.Id -ResourceId $graphSp.Id -AppRoleId $directoryReadAllId -ErrorAction Stop | Out-Null
+            Write-Log -Level 'RESULT' -Message 'Granted application permission: Microsoft Graph Directory.Read.All'
+        } catch {
+            Write-Log -Level 'WARN' -Message "Admin consent for Graph Directory.Read.All failed: $($_.Exception.Message). A privileged admin must grant consent later."
+        }
+        try {
+            New-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id -PrincipalId $sp.Id -ResourceId $graphSp.Id -AppRoleId $userReadAllId -ErrorAction Stop | Out-Null
+            Write-Log -Level 'RESULT' -Message 'Granted application permission: Microsoft Graph User.Read.All'
+        } catch {
+            Write-Log -Level 'WARN' -Message "Admin consent for Graph User.Read.All failed: $($_.Exception.Message). A privileged admin must grant consent later."
+        }
     } catch {
-        Write-Log -Level 'WARN' -Message "Admin consent for Graph User.Read.All failed: $($_.Exception.Message). A privileged admin must grant consent later."
+        Write-Log -Level 'WARN' -Message "Failed to locate Microsoft Graph service principal for admin consent: $($_.Exception.Message)"
         # Do not throw; continue and return IDs so caller can persist config and avoid re-creating app.
     }
 
@@ -402,7 +433,19 @@ function Get-EntraUsersViaGraph {
     }
 
     Write-Log -Level 'ACTION' -Message 'Querying Entra ID users via Microsoft Graph...'
-    $users = Get-MgUser -All -ConsistencyLevel eventual -Count userCount -Property id,displayName,givenName,surname,userPrincipalName,mail,otherMails,proxyAddresses,department,jobTitle,officeLocation,businessPhones,mobilePhone,city,state,postalCode,streetAddress,country,accountEnabled
+    $users = $null
+    try {
+        # Advanced query variant (count + consistency header) may require Directory.Read.All for app-only
+        $users = Get-MgUser -All -ConsistencyLevel eventual -Count userCount -Property id,displayName,givenName,surname,userPrincipalName,mail,otherMails,proxyAddresses,department,jobTitle,officeLocation,businessPhones,mobilePhone,city,state,postalCode,streetAddress,country,accountEnabled
+    } catch {
+        $msg = [string]$_.Exception.Message
+        if ($msg -match 'Authorization_RequestDenied' -or $msg -match 'Insufficient privileges') {
+            Write-Log -Level 'WARN' -Message 'App-only list with count/ConsistencyLevel was denied. Falling back to basic list (no $count). Consider granting Microsoft Graph Directory.Read.All (Application) for advanced queries.'
+            $users = Get-MgUser -All -Property id,displayName,givenName,surname,userPrincipalName,mail,otherMails,proxyAddresses,department,jobTitle,officeLocation,businessPhones,mobilePhone,city,state,postalCode,streetAddress,country,accountEnabled
+        } else {
+            throw
+        }
+    }
 
     $rows = @()
     foreach ($u in $users) {
@@ -509,8 +552,55 @@ function Show-UserCard {
         $val = [string]$p.Value
         Write-Host ("{0,-28}: {1}" -f $name, $val)
     }
+    # Preview sAMAccountName candidate derived from UPN local part (pre-Windows 2000)
+    try {
+        $upnLocalPreview = ([string]$Row.'User principal name').Split('@')[0].ToLower()
+        $basePreview = if ($upnLocalPreview.Length -gt 20) { Get-Pre2000SamCandidate -UpnLocalPart $upnLocalPreview } else { $upnLocalPreview }
+        $dispPreview = if ($basePreview.Length -gt 20) { $basePreview.Substring(0,20) } else { $basePreview }
+        Write-Host ("{0,-28}: {1}" -f 'sAMAccountName (candidate)', $dispPreview)
+    } catch {}
     Write-Host "------------------------------------------------------" -ForegroundColor Cyan
     Write-Host ""
+}
+
+function Show-Welcome {
+    param([string]$Source)
+    try {
+        if ($Source -ne 'Online') { return }
+        $hasAppIds = ($TenantId -and $ClientId)
+        $envName = if ($ClientSecretEnvVar) { [string]$ClientSecretEnvVar } else { 'OPENIDSYNC_CLIENT_SECRET' }
+        $envProc = [Environment]::GetEnvironmentVariable($envName, 'Process')
+        $envUser = [Environment]::GetEnvironmentVariable($envName, 'User')
+        $secretPresent = (-not [string]::IsNullOrWhiteSpace($envProc)) -or (-not [string]::IsNullOrWhiteSpace($envUser))
+
+        Write-Host ""; Write-Host "==== Welcome to OpenIDSync — Getting ready for daily use ====" -ForegroundColor Cyan
+        $flow = @(
+            'Online onboarding flow:',
+            '  1) Delegated sign-in (interactive) — first run',
+            ('  2) Create App Registration + Service Principal, print secret; set env var {0}' -f $envName),
+            '  3) App-only (Service Principal) — subsequent runs'
+        )
+        foreach ($l in $flow) { Write-Host $l; Write-Log -Level 'INFO' -Message $l }
+
+        $status = @()
+        if (-not $hasAppIds) {
+            $status += 'Status: No App Registration found in OnlineSyncConfig. This run will use delegated sign-in.'
+            $status += 'Tip: Add -AutoInstallGraphModules and optionally -AutoCreateGraphApp to create the app now.'
+        } elseif ($hasAppIds -and -not $secretPresent) {
+            $status += ("Status: App Registration detected, but client secret env var '{0}' is not set." -f $envName)
+            $status += 'Action: Set the secret and open a NEW PowerShell window:'
+            $status += ("        setx {0} `"YOUR_SECRET_HERE`"" -f $envName)
+            $status += '        or run .\97_Set_OPENIDSYNC_CLIENT_SECRET.ps1'
+        } else {
+            $status += 'Status: App Registration and client secret found — App-only (Service Principal) is ready.'
+        }
+        if ($script:OnlineSyncConfigPath) {
+            $status += ("Online sync IDs file: {0}" -f $script:OnlineSyncConfigPath)
+        }
+        $status += 'Reset cached tokens if switching modes: .\98_Reset_Azure_Login_Session.ps1'
+        foreach ($l in $status) { Write-Host $l; Write-Log -Level 'INFO' -Message $l }
+        Write-Host ('{0}' -f ('=' * 58)) -ForegroundColor Cyan; Write-Host ''
+    } catch {}
 }
 
 function Get-PrimarySmtpFromProxyAddresses {
@@ -550,7 +640,13 @@ function Get-ADUserByEmail {
 
 function Next-AvailableSam {
     param([string]$BaseSam)
-    $sam = if ($BaseSam.Length -gt 20) { $BaseSam.Substring(0,20) } else { $BaseSam }
+    if ($BaseSam.Length -gt 20) {
+        $orig = $BaseSam
+        $sam = $BaseSam.Substring(0,20)
+        try { Write-Log -Level 'WARN' -Message ("sAMAccountName base > 20 chars; truncating: '{0}' (len {1}) -> '{2}' (len {3})" -f $orig, $orig.Length, $sam, $sam.Length) } catch {}
+    } else {
+        $sam = $BaseSam
+    }
     if (-not (Get-ADUser -Filter "SamAccountName -eq '$sam'" -ErrorAction SilentlyContinue)) {
         return $sam
     }
@@ -565,6 +661,36 @@ function Next-AvailableSam {
         }
     }
     throw "Unable to find available sAMAccountName based on '$BaseSam'"
+}
+
+function Get-Pre2000SamCandidate {
+    param([Parameter(Mandatory=$true)][string]$UpnLocalPart)
+    # Start from the local part (before @), lowercased
+    $candidate = $UpnLocalPart.ToLower()
+
+    # If already within the 20-char sAMAccountName limit, keep as-is
+    if ($candidate.Length -le 20) { return $candidate }
+
+    # Split into left/right by the first dot (e.g., last.first)
+    $dotIdx = $candidate.IndexOf('.')
+    $left = $candidate
+    $right = ''
+    if ($dotIdx -gt 0) {
+        $left = $candidate.Substring(0, $dotIdx)
+        $right = $candidate.Substring($dotIdx + 1)
+    }
+
+    # If left part has a dash, compress everything after the first dash to a single initial
+    # Example: "macskasy-denes" -> "macskasy-d"
+    $dashIdx = $left.IndexOf('-')
+    if ($dashIdx -gt 0 -and ($dashIdx + 1) -lt $left.Length) {
+        $initial = $left.Substring($dashIdx + 1, 1)
+        $left = $left.Substring(0, $dashIdx + 1) + $initial
+    }
+
+    # Recombine (preserve format with dot if it existed)
+    $compressed = if ($dotIdx -gt 0) { "$left.$right" } else { $left }
+    return $compressed
 }
 
 function Get-NextDescription {
@@ -642,7 +768,7 @@ function Process-User {
 
     $proceed = $false
     $skippedByPrompt = $false
-    if ($script:ProcessAll) {
+    if ($script:ProcessAll -or $script:NonInteractive) {
         $proceed = $true
     } else {
         $q = "Do you want to import user $first $last ($upn) [Y]es/[N]o/[A]ll/[Q]uit"
@@ -733,7 +859,15 @@ function Process-User {
     }
     else {
         # Create new user
-        $baseSam = ($upn.Split('@')[0]).ToLower()
+        $baseUpnLocal = ($upn.Split('@')[0]).ToLower()
+        $baseSam = $baseUpnLocal
+        if ($baseUpnLocal.Length -gt 20) {
+            $compressed = Get-Pre2000SamCandidate -UpnLocalPart $baseUpnLocal
+            if ($compressed -ne $baseUpnLocal) {
+                Write-Log -Level 'WARN' -Message ("sAMAccountName base exceeded 20 chars; compressing dashed surname: '{0}' (len {1}) -> '{2}' (len {3})" -f $baseUpnLocal, $baseUpnLocal.Length, $compressed, $compressed.Length)
+                $baseSam = $compressed
+            }
+        }
         $sam = Next-AvailableSam -BaseSam $baseSam
         if ($sam -ieq 'administrator') {
             Write-Log -Level 'WARN' -Message "Skip creating user with sAMAccountName 'administrator'."
@@ -750,7 +884,8 @@ function Process-User {
         $passwordPlain = New-RandomPassword -Length 16
         $password = ConvertTo-SecureString $passwordPlain -AsPlainText -Force
 
-        Write-Log -Level 'ACTION' -Message "Creating AD user: $sam ($email) in OU: $DefaultOU"
+    Write-Log -Level 'INFO' -Message ("sAMAccountName chosen: {0}" -f $sam)
+    Write-Log -Level 'ACTION' -Message "Creating AD user: $sam ($email) in OU: $DefaultOU"
         # Create first; if it fails, do not attempt post-creation updates
         try {
             New-ADUser `
@@ -892,17 +1027,22 @@ if (Test-Path -LiteralPath $ConfigPath) {
             if (-not $osc -and $cfg.OnlineSyncConfig) { $osc = $cfg.OnlineSyncConfig }
 
             if ($osc) {
-                $oscTenantId = $null; $oscClientId = $null; $oscEnvVar = $null; $oscPref = $null
+                $oscTenantId = $null; $oscClientId = $null; $oscEnvVar = $null
                 try { $oscTenantId = $osc.TenantId } catch {}
                 try { $oscClientId = $osc.ClientId } catch {}
                 try { $oscEnvVar = $osc.ClientSecretEnvVar } catch {}
-                try { $oscPref = $osc.PreferredSource } catch {}
                 if (-not $PSBoundParameters.ContainsKey('TenantId') -and $oscTenantId) { $TenantId = [string]$oscTenantId }
                 if (-not $PSBoundParameters.ContainsKey('ClientId') -and $oscClientId) { $ClientId = [string]$oscClientId }
                 # Never read client secrets from JSON; prefer env var name from config if present
                 if (-not $PSBoundParameters.ContainsKey('ClientSecretEnvVar') -and $oscEnvVar) { $ClientSecretEnvVar = [string]$oscEnvVar }
-                if (-not $PSBoundParameters.ContainsKey('Source') -and $oscPref) { $Source = [string]$oscPref }
             }
+            # Preferred source now lives in main config under UserSyncConfig.PreferredSource
+            try {
+                if (-not $PSBoundParameters.ContainsKey('Source') -and $cfg.UserSyncConfig -and $cfg.UserSyncConfig.PreferredSource) {
+                    $Source = [string]$cfg.UserSyncConfig.PreferredSource
+                    $script:SourceFromConfig = $true
+                }
+            } catch {}
             # Logging config (if present)
             if ($cfg.LoggingConfig) {
                 $lgc = $cfg.LoggingConfig
@@ -915,28 +1055,49 @@ if (Test-Path -LiteralPath $ConfigPath) {
     } catch {}
 }
 if ($AutoInstallGraphModules) { $script:AutoInstallGraphModules = $true } else { $script:AutoInstallGraphModules = $false }
+if ($NonInteractive) { $script:NonInteractive = $true; $script:ProcessAll = $true }
+if ($AllUsers) { $script:ProcessAll = $true }
 if (-not $DefaultOU) {
-    $DefaultOU = Read-Host "Enter default OU distinguishedName for new/managed users (e.g. OU=Users,DC=example,DC=com)"
+    if ($script:NonInteractive) {
+        throw "Default OU is required in -NonInteractive mode. Provide -DefaultOU or set it in 00_OpenIDSync_Config.json."
+    } else {
+        $DefaultOU = Read-Host "Enter default OU distinguishedName for new/managed users (e.g. OU=Users,DC=example,DC=com)"
+    }
 }
 if ([string]::IsNullOrWhiteSpace($DefaultOU)) {
     throw "Default OU is required."
 }
 
-# Choose source if not specified
-if (-not $PSBoundParameters.ContainsKey('Source')) {
-    Write-Host "Select input source:" -ForegroundColor Cyan
-    Write-Host "  [O]nline (Microsoft Graph / Entra ID)" -ForegroundColor Cyan
-    Write-Host "  [C]SV (offline Microsoft 365 export)" -ForegroundColor Cyan
-    $ans = (Read-Host "Enter O or C").ToUpper()
-    switch ($ans) {
-        'O' { $Source = 'Online' }
-        'C' { $Source = 'CSV' }
-        default { $Source = 'CSV' }
+# Choose source if not specified explicitly or via config
+if ([string]::IsNullOrWhiteSpace($Source)) {
+    if ($script:NonInteractive) {
+        $cfgPathMsg = if ($script:ConfigPath) { $script:ConfigPath } else { '00_OpenIDSync_Config.json' }
+        $msg = "-NonInteractive: Missing input source. Set UserSyncConfig.PreferredSource to 'Online' (recommended) or 'CSV' in $cfgPathMsg, or pass -Source Online/CSV on the command line."
+        throw $msg
+    } else {
+        Write-Host "Select input source:" -ForegroundColor Cyan
+        Write-Host "  1 - Online (Microsoft Graph / Entra ID)" -ForegroundColor Cyan
+        Write-Host "  2 - CSV (offline Microsoft 365 export)" -ForegroundColor Cyan
+        $ans = Read-Host "Enter 1 or 2 (default: 1)"
+        switch (($ans + '').Trim().ToUpper()) {
+            '' { $Source = 'Online' }
+            '1' { $Source = 'Online' }
+            '2' { $Source = 'CSV' }
+            'O' { $Source = 'Online' } # backward compatible
+            'C' { $Source = 'CSV' }    # backward compatible
+            default { $Source = 'Online' }
+        }
     }
+}
+
+# Guard: NonInteractive cannot create app interactively
+if ($script:NonInteractive -and $AutoCreateGraphApp) {
+    throw "-AutoCreateGraphApp requires interactive sign-in and cannot be used with -NonInteractive. Pre-create the app or run once interactively to bootstrap."
 }
 
 if ($Source -eq 'CSV') {
     if (-not $CsvPath) {
+        if ($script:NonInteractive) { throw "CSV path is required in -NonInteractive mode. Provide -CsvPath." }
         $CsvPath = Read-Host "Enter path to Microsoft 365 users CSV export"
     }
     if (-not (Test-Path -LiteralPath $CsvPath)) {
@@ -962,11 +1123,16 @@ if (-not $script:SkipUpnTokens -or $script:SkipUpnTokens.Count -eq 0) {
     }
 }
 
-# Logs (default to file-only, Linux-like filenames)
+# Logs (default to file-only, Linux-like filenames) — always under ./log relative to the script
 if (-not $script:LogMode) { $script:LogMode = 'File' }
 if (-not $script:LogSyslogPort) { $script:LogSyslogPort = 514 }
-$script:AuditLogPath = if ($script:LogFilePath) { [string]$script:LogFilePath } else { Join-Path -Path (Get-Location) -ChildPath 'openidsync.log' }
-$script:CredLogPath  = Join-Path -Path (Get-Location) -ChildPath 'openidsync-credentials.csv'
+$script:BaseDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+$script:LogDir = Join-Path -Path $script:BaseDir -ChildPath 'log'
+try { if (-not (Test-Path -LiteralPath $script:LogDir)) { New-Item -Path $script:LogDir -ItemType Directory -Force | Out-Null } } catch {}
+# Respect configured FilePath name but place it inside ./log
+$logFileName = if ($script:LogFilePath) { Split-Path -Path $script:LogFilePath -Leaf } else { 'openidsync.log' }
+$script:AuditLogPath = Join-Path -Path $script:LogDir -ChildPath $logFileName
+$script:CredLogPath  = Join-Path -Path $script:LogDir -ChildPath 'openidsync-credentials.csv'
 
 try { Initialize-Logger -Mode $script:LogMode -FilePath $script:AuditLogPath -SyslogServer $script:LogSyslogServer -SyslogPort $script:LogSyslogPort | Out-Null } catch {}
 
@@ -978,6 +1144,7 @@ Write-Log -Level 'INFO' -Message ("Logging initialized: Mode={0}, File={1}, Sysl
 $funcCapMsg = "MaximumFunctionCount in use: $MaximumFunctionCount"
 Write-Log -Level 'INFO' -Message $funcCapMsg
 if ($Source -eq 'Online') {
+    Show-Welcome -Source $Source
     Write-Log -Level 'INFO' -Message "Source: Online (Microsoft Graph)"
     $script:SourceLabel = 'Online'
 } else {
@@ -998,12 +1165,12 @@ if ($Source -eq 'Online') {
             $TenantId = $appInfo.TenantId; $ClientId = $appInfo.ClientId; $ClientSecret = $appInfo.ClientSecret
             Write-Log -Level 'INFO' -Message 'New App Registration created successfully for Online mode.'
             # Save identifiers to config to avoid re-creating
-            Save-OnlineSyncConfig -OnlineConfigPath $script:OnlineSyncConfigPath -TenantId $TenantId -ClientId $ClientId -SpObjectId $appInfo.SpObjectId -PreferredSource 'Online' -ClientSecretEnvVar $ClientSecretEnvVar
+            Save-OnlineSyncConfig -OnlineConfigPath $script:OnlineSyncConfigPath -TenantId $TenantId -ClientId $ClientId -SpObjectId $appInfo.SpObjectId -ClientSecretEnvVar $ClientSecretEnvVar
             # Show secret ONCE and instruct to set environment variable
             Write-Host ""; Write-Host "==== IMPORTANT: CLIENT SECRET (copy and store securely) ==== " -ForegroundColor Yellow
             Write-Host ($appInfo.ClientSecret) -ForegroundColor Yellow
             Write-Host "Set environment variable before running next time (example):" -ForegroundColor Yellow
-            Write-Host ('setx {0} "<YOUR-SECRET-HERE>"' -f $ClientSecretEnvVar) -ForegroundColor Yellow
+            Write-Host ('setx {0} "YOUR_SECRET_HERE"' -f $ClientSecretEnvVar) -ForegroundColor Yellow
             Write-Host "Secret will NOT be stored in any file." -ForegroundColor Yellow
             if ($AssignDirectoryReaderToApp) {
                 Ensure-DirectoryReadersRoleForSp -SpObjectId $appInfo.SpObjectId
@@ -1052,9 +1219,14 @@ if ($Source -eq 'Online') {
             if ($envSecret) { $ClientSecret = $envSecret }
         }
         if (-not $ClientSecret -and $TenantId -and $ClientId) {
-            Write-Host "Client secret not found in environment variable '$ClientSecretEnvVar'." -ForegroundColor Yellow
-            $ClientSecret = Read-Host -AsSecureString "Enter Client Secret (will not be stored)" | ForEach-Object { [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($_)) }
-            if (-not $ClientSecret) { Write-Host ("Tip: setx {0} ""<YOUR-SECRET-HERE>""  (persists for new sessions)" -f $ClientSecretEnvVar) -ForegroundColor Yellow }
+            if ($script:NonInteractive) {
+                $msg = "Client secret not found in env var '$ClientSecretEnvVar' in -NonInteractive mode. Set it via: setx $ClientSecretEnvVar `"YOUR_SECRET_HERE`" (open a new PowerShell window)."
+                throw $msg
+            } else {
+                Write-Host "Client secret not found in environment variable '$ClientSecretEnvVar'." -ForegroundColor Yellow
+                $ClientSecret = Read-Host -AsSecureString "Enter Client Secret (will not be stored)" | ForEach-Object { [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($_)) }
+                if (-not $ClientSecret) { Write-Host ("Tip: setx $ClientSecretEnvVar `"YOUR_SECRET_HERE`"  (persists for new sessions)") -ForegroundColor Yellow }
+            }
         }
         if ($TenantId -and $ClientId -and $ClientSecret) { Print-SecuritySummary -AppOnly }
         else { Print-SecuritySummary }
@@ -1072,6 +1244,77 @@ if ($Source -eq 'Online') {
     # Import CSV (new M365 Admin export format)
     $rows = Import-Csv -LiteralPath $CsvPath
 }
+
+# --- Start-of-run summary (console + log) ---
+try {
+    $csvPathDisp = if ($CsvPath) { [string]$CsvPath } else { '-' }
+    $cfgMainPath = if ($script:ConfigPath) { [string]$script:ConfigPath } else { '-' }
+    $cfgOnlinePath = if ($script:OnlineSyncConfigPath) { [string]$script:OnlineSyncConfigPath } else { '-' }
+    $syslogHost = if ($script:LogSyslogServer) { [string]$script:LogSyslogServer } else { '-' }
+    $lgMode = if ($script:LogMode) { [string]$script:LogMode } else { 'File' }
+    $lgFile = if ($script:AuditLogPath) { [string]$script:AuditLogPath } else { '-' }
+    $lgPort = if ($script:LogSyslogPort) { [string]$script:LogSyslogPort } else { '514' }
+
+    $summaryHeader = '==== Run Configuration Summary ===='
+    Write-Host $summaryHeader -ForegroundColor Cyan
+    $summaryLines = @(
+        ('{0,-26}: {1}' -f 'Main Config', $cfgMainPath),
+        ('{0,-26}: {1}' -f 'Online Config', $cfgOnlinePath),
+        ('{0,-26}: {1}' -f 'Source', $Source),
+        ('{0,-26}: {1}' -f 'Default OU', $DefaultOU),
+        ('{0,-26}: {1}' -f 'CSV Path', $csvPathDisp),
+        ('{0,-26}: {1}' -f 'Logging Mode', $lgMode),
+        ('{0,-26}: {1}' -f 'Log File', $lgFile),
+        ('{0,-26}: {1}' -f 'Syslog', ("{0}:{1}" -f $syslogHost, $lgPort))
+    )
+    foreach ($l in $summaryLines) { Write-Host $l }
+    Write-Host ('{0}' -f ('=' * $summaryHeader.Length)) -ForegroundColor Cyan
+    foreach ($l in $summaryLines) { Write-Log -Level 'INFO' -Message $l }
+
+    # Also echo key values from JSON so the user understands current run
+    if ($cfgMainPath -ne '-' -and (Test-Path -LiteralPath $cfgMainPath)) {
+        try {
+            $cfgPreview = Get-Content -LiteralPath $cfgMainPath -Raw | ConvertFrom-Json
+            if ($cfgPreview.UserSyncConfig) {
+                Write-Host "-- UserSyncConfig --" -ForegroundColor DarkCyan
+                $usc = $cfgPreview.UserSyncConfig
+                $uscLines = @()
+                $uscLines += ('{0,-26}: {1}' -f 'CsvPath', [string]$usc.CsvPath)
+                $uscLines += ('{0,-26}: {1}' -f 'DefaultOU', [string]$usc.DefaultOU)
+                $uscLines += ('{0,-26}: {1}' -f 'PreferredSource', [string]$usc.PreferredSource)
+                $uscLines += ('{0,-26}: {1}' -f 'SuggestRemovals', [string]$usc.SuggestRemovals)
+                $uscLines += ('{0,-26}: {1}' -f 'SkipDisplayNameTokens', ([string]::Join(', ', [string[]]$usc.SkipUserBasedOnDisplayName)))
+                $uscLines += ('{0,-26}: {1}' -f 'SkipUpnTokens', ([string]::Join(', ', [string[]]$usc.SkipUserBasedOnUserPrincipalName)))
+                foreach ($l in $uscLines) { Write-Host $l; Write-Log -Level 'INFO' -Message ("UserSyncConfig | {0}" -f $l) }
+            }
+            if ($cfgPreview.LoggingConfig) {
+                Write-Host "-- LoggingConfig --" -ForegroundColor DarkCyan
+                $lgc = $cfgPreview.LoggingConfig
+                $lgcLines = @()
+                $lgcLines += ('{0,-26}: {1}' -f 'Mode', [string]$lgc.Mode)
+                $lgcLines += ('{0,-26}: {1}' -f 'FilePath', [string]$lgc.FilePath)
+                $lgcLines += ('{0,-26}: {1}' -f 'SyslogServer', [string]$lgc.SyslogServer)
+                $lgcLines += ('{0,-26}: {1}' -f 'SyslogPort', [string]$lgc.SyslogPort)
+                foreach ($l in $lgcLines) { Write-Host $l; Write-Log -Level 'INFO' -Message ("LoggingConfig | {0}" -f $l) }
+            }
+        } catch {}
+    }
+    if ($cfgOnlinePath -ne '-' -and (Test-Path -LiteralPath $cfgOnlinePath)) {
+        try {
+            $oscPreview = Get-Content -LiteralPath $cfgOnlinePath -Raw | ConvertFrom-Json
+            if ($oscPreview.OnlineSyncConfig) {
+                Write-Host "-- OnlineSyncConfig --" -ForegroundColor DarkCyan
+                $oc = $oscPreview.OnlineSyncConfig
+                $ocLines = @()
+                $ocLines += ('{0,-26}: {1}' -f 'TenantId', [string]$oc.TenantId)
+                $ocLines += ('{0,-26}: {1}' -f 'ClientId', [string]$oc.ClientId)
+                $ocLines += ('{0,-26}: {1}' -f 'SpObjectId', [string]$oc.SpObjectId)
+                $ocLines += ('{0,-26}: {1}' -f 'ClientSecretEnvVar', [string]$oc.ClientSecretEnvVar)
+                foreach ($l in $ocLines) { Write-Host $l; Write-Log -Level 'INFO' -Message ("OnlineSyncConfig | {0}" -f $l) }
+            }
+        } catch {}
+    }
+} catch {}
 
 if (-not $rows -or $rows.Count -eq 0) {
     Write-Log -Level 'WARN' -Message "No rows found from input source."

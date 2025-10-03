@@ -3,7 +3,6 @@
     "TenantId": "",
     "ClientId": "",
     "SpObjectId": "",
-    "PreferredSource": "Online",
     "ClientSecretEnvVar": ""
   }
 }
