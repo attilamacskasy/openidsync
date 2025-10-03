@@ -27,6 +27,11 @@ $script:OnlineSyncConfigPath = $OnlineSyncConfigPath
 $script:NonInteractive = $false
 $script:ProcessAll = $false
 $script:SourceFromConfig = $false
+$script:ModeUsers = 'All'
+$script:ModeGroups = 'All'
+$script:ModeMemberships = 'All'
+$script:GroupsProcessAll = $false
+$script:MembershipsProcessAll = $false
 
 # Load OpenIDSync modules (modularized by domain) with per-file error handling
 try {
@@ -200,6 +205,34 @@ if (Test-Path -LiteralPath $ConfigPath) {
                 try { $script:LogSyslogServer = [string]$lgc.SyslogServer } catch {}
                 try { $script:LogSyslogPort = [int]$lgc.SyslogPort } catch {}
             }
+
+            # Background mode run-modes from JSON (if provided)
+            if ($script:NonInteractive) {
+                try {
+                    $modesObj = $null
+                    if ($cfg.SyncModes) { $modesObj = $cfg.SyncModes }
+                    elseif ($usc.SyncModes) { $modesObj = $usc.SyncModes }
+                    # Also accept flat properties for backward compatibility
+                    $mu = $null; $mg = $null; $mm = $null
+                    if ($modesObj) {
+                        try { $mu = [string]$modesObj.Users } catch {}
+                        try { $mg = [string]$modesObj.Groups } catch {}
+                        try { $mm = [string]$modesObj.Memberships } catch {}
+                    } else {
+                        try { $mu = [string]$usc.UsersMode } catch {}
+                        try { $mg = [string]$usc.GroupsMode } catch {}
+                        try { $mm = [string]$usc.MembershipsMode } catch {}
+                    }
+                    function _normMode([string]$v){
+                        if ([string]::IsNullOrWhiteSpace($v)) { return $null }
+                        $t = $v.Trim().ToUpper()
+                        switch ($t) { 'A' { 'All' } 'ALL' { 'All' } 'P' { 'Prompt' } 'PROMPT' { 'Prompt' } 'S' { 'Skip' } 'SKIP' { 'Skip' } default { $null } }
+                    }
+                    $nmu = _normMode $mu; if ($nmu) { $script:ModeUsers = $nmu }
+                    $nmg = _normMode $mg; if ($nmg) { $script:ModeGroups = $nmg }
+                    $nmm = _normMode $mm; if ($nmm) { $script:ModeMemberships = $nmm }
+                } catch {}
+            }
         }
     } catch {}
 }
@@ -237,6 +270,26 @@ if ([string]::IsNullOrWhiteSpace($Source)) {
             default { $Source = 'Online' }
         }
     }
+}
+
+# Interactive menu for modes (only when not NonInteractive)
+if (-not $script:NonInteractive) {
+    Write-Host ""; Write-Host "Source: Microsoft Entra ID" -ForegroundColor Cyan
+    Write-Host "Target: Windows Active Directory" -ForegroundColor Cyan
+    Write-Host ""; Write-Host "1 Users? (select from list above)" -ForegroundColor Cyan
+    Write-Host "  1.1. [A]ll users (default)"; Write-Host "  1.2. [P]rompt for each user"; Write-Host "  1.3. [S]kip Users (no user sync)"
+    $ans1 = Read-Host "Choose Users mode [A/P/S] (default: A)"
+    switch (($ans1 + '').Trim().ToUpper()) { 'P' { $script:ModeUsers='Prompt' } 'S' { $script:ModeUsers='Skip' } default { $script:ModeUsers='All' } }
+
+    Write-Host ""; Write-Host "2 Groups?" -ForegroundColor Cyan
+    Write-Host "  2.1. [A]ll groups"; Write-Host "  2.2. [P]rompt for each group"; Write-Host "  2.3. [S]kip Groups (no group sync)"
+    $ans2 = Read-Host "Choose Groups mode [A/P/S] (default: A)"
+    switch (($ans2 + '').Trim().ToUpper()) { 'P' { $script:ModeGroups='Prompt' } 'S' { $script:ModeGroups='Skip' } default { $script:ModeGroups='All' } }
+
+    Write-Host ""; Write-Host "3 Group memberships?" -ForegroundColor Cyan
+    Write-Host "  3.1. [A]ll memberships"; Write-Host "  3.2. [P]rompt for each membership"; Write-Host "  3.3. [S]kip memberships (no memberships sync)"
+    $ans3 = Read-Host "Choose Memberships mode [A/P/S] (default: A)"
+    switch (($ans3 + '').Trim().ToUpper()) { 'P' { $script:ModeMemberships='Prompt' } 'S' { $script:ModeMemberships='Skip' } default { $script:ModeMemberships='All' } }
 }
 
 # Guard: NonInteractive cannot create app interactively
@@ -384,14 +437,16 @@ if ($Source -eq 'Online') {
         if ($lic) {
             Write-Log -Level 'INFO' -Message ("Tenant license plan detected: {0} (Premium features: {1})" -f $lic.Plan, $(if($lic.HasPremium){'Yes'}else{'No'}))
         }
-    $rows = Get-EntraUsersViaGraph -TenantId $TenantId -ClientId $ClientId -ClientSecret $ClientSecret
+        if ($script:ModeUsers -ne 'Skip') {
+            $rows = Get-EntraUsersViaGraph -TenantId $TenantId -ClientId $ClientId -ClientSecret $ClientSecret
+        } else { $rows = @() }
     } catch {
         Write-Log -Level 'ERROR' -Message "Online fetch failed: $($_.Exception.Message)"
         throw
     }
 } else {
     # Import CSV via provider (new M365 Admin export format)
-    $rows = Get-UsersFromCsv -CsvPath $CsvPath
+    if ($script:ModeUsers -ne 'Skip') { $rows = Get-UsersFromCsv -CsvPath $CsvPath } else { $rows = @() }
 }
 
 # --- Start-of-run summary (console + log) ---
@@ -411,6 +466,9 @@ try {
         ('{0,-26}: {1}' -f 'Online Config', $cfgOnlinePath),
         ('{0,-26}: {1}' -f 'Source', $Source),
         ('{0,-26}: {1}' -f 'Default OU', $DefaultOU),
+        ('{0,-26}: {1}' -f 'Users Mode', $script:ModeUsers),
+        ('{0,-26}: {1}' -f 'Groups Mode', $script:ModeGroups),
+        ('{0,-26}: {1}' -f 'Memberships Mode', $script:ModeMemberships),
         ('{0,-26}: {1}' -f 'CSV Path', $csvPathDisp),
         ('{0,-26}: {1}' -f 'Logging Mode', $lgMode),
         ('{0,-26}: {1}' -f 'Log File', $lgFile),
@@ -425,7 +483,7 @@ try {
         try {
             $cfgPreview = Get-Content -LiteralPath $cfgMainPath -Raw | ConvertFrom-Json
             if ($cfgPreview.UserSyncConfig) {
-                Write-Host "-- UserSyncConfig --" -ForegroundColor DarkCyan
+                #Write-Host "-- UserSyncConfig --" -ForegroundColor DarkCyan
                 $usc = $cfgPreview.UserSyncConfig
                 $uscLines = @()
                 $uscLines += ('{0,-26}: {1}' -f 'CsvPath', [string]$usc.CsvPath)
@@ -434,17 +492,17 @@ try {
                 $uscLines += ('{0,-26}: {1}' -f 'SuggestRemovals', [string]$usc.SuggestRemovals)
                 $uscLines += ('{0,-26}: {1}' -f 'SkipDisplayNameTokens', ([string]::Join(', ', [string[]]$usc.SkipUserBasedOnDisplayName)))
                 $uscLines += ('{0,-26}: {1}' -f 'SkipUpnTokens', ([string]::Join(', ', [string[]]$usc.SkipUserBasedOnUserPrincipalName)))
-                foreach ($l in $uscLines) { Write-Host $l; Write-Log -Level 'INFO' -Message ("UserSyncConfig | {0}" -f $l) }
+                foreach ($l in $uscLines) { Write-Log -Level 'INFO' -Message ("UserSyncConfig | {0}" -f $l) }
             }
             if ($cfgPreview.LoggingConfig) {
-                Write-Host "-- LoggingConfig --" -ForegroundColor DarkCyan
+                #Write-Host "-- LoggingConfig --" -ForegroundColor DarkCyan
                 $lgc = $cfgPreview.LoggingConfig
                 $lgcLines = @()
                 $lgcLines += ('{0,-26}: {1}' -f 'Mode', [string]$lgc.Mode)
                 $lgcLines += ('{0,-26}: {1}' -f 'FilePath', [string]$lgc.FilePath)
                 $lgcLines += ('{0,-26}: {1}' -f 'SyslogServer', [string]$lgc.SyslogServer)
                 $lgcLines += ('{0,-26}: {1}' -f 'SyslogPort', [string]$lgc.SyslogPort)
-                foreach ($l in $lgcLines) { Write-Host $l; Write-Log -Level 'INFO' -Message ("LoggingConfig | {0}" -f $l) }
+                foreach ($l in $lgcLines) {  Write-Log -Level 'INFO' -Message ("LoggingConfig | {0}" -f $l) }
             }
         } catch {}
     }
@@ -452,22 +510,25 @@ try {
         try {
             $oscPreview = Get-Content -LiteralPath $cfgOnlinePath -Raw | ConvertFrom-Json
             if ($oscPreview.OnlineSyncConfig) {
-                Write-Host "-- OnlineSyncConfig --" -ForegroundColor DarkCyan
+                #Write-Host "-- OnlineSyncConfig --" -ForegroundColor DarkCyan
                 $oc = $oscPreview.OnlineSyncConfig
                 $ocLines = @()
                 $ocLines += ('{0,-26}: {1}' -f 'TenantId', [string]$oc.TenantId)
                 $ocLines += ('{0,-26}: {1}' -f 'ClientId', [string]$oc.ClientId)
                 $ocLines += ('{0,-26}: {1}' -f 'SpObjectId', [string]$oc.SpObjectId)
                 $ocLines += ('{0,-26}: {1}' -f 'ClientSecretEnvVar', [string]$oc.ClientSecretEnvVar)
-                foreach ($l in $ocLines) { Write-Host $l; Write-Log -Level 'INFO' -Message ("OnlineSyncConfig | {0}" -f $l) }
+                foreach ($l in $ocLines) { Write-Log -Level 'INFO' -Message ("OnlineSyncConfig | {0}" -f $l) }
             }
         } catch {}
     }
 } catch {}
 
 if (-not $rows -or $rows.Count -eq 0) {
-    Write-Log -Level 'WARN' -Message "No rows found from input source."
-    return
+    Write-Log -Level 'WARN' -Message "No user rows fetched from source."
+    if ($Source -ne 'Online' -or $script:ModeUsers -ne 'Skip') {
+        # For CSV or when users requested, no rows means abort
+        return
+    }
 }
 
 $script:ProcessAll = $false
@@ -504,39 +565,60 @@ catch {
 }
 
 # Process users
-foreach ($row in $rows) {
-    Invoke-UserSync -Row $row -DefaultOU $DefaultOU
-
-    if ($script:QuitRequested) {
-        Write-Log -Level 'INFO' -Message 'Quit requested by user. Stopping import.'
-        break
+if ($script:ModeUsers -ne 'Skip') {
+    if ($script:ModeUsers -eq 'All') { $script:ProcessAll = $true }
+    if ($script:ModeUsers -eq 'Prompt') { $script:ProcessAll = $false }
+    foreach ($row in $rows) {
+        Invoke-UserSync -Row $row -DefaultOU $DefaultOU
+        if ($script:QuitRequested) { Write-Log -Level 'INFO' -Message 'Quit requested by user. Stopping user import.'; break }
     }
 }
 
 # Groups and memberships (Online source only)
-if ($Source -eq 'Online' -and -not $script:QuitRequested) {
+if ($Source -eq 'Online' -and -not $script:QuitRequested -and $script:ModeGroups -ne 'Skip') {
     try {
         Write-Log -Level 'ACTION' -Message 'Reconciling groups from Entra to AD...'
         $groups = Get-EntraGroupsViaGraph
         Write-Log -Level 'INFO' -Message ("Groups to reconcile: {0}" -f $groups.Count)
         $groupMap = @{}
         foreach ($g in $groups) {
+            $proceedGroup = $true
+            if ($script:ModeGroups -eq 'Prompt' -and -not $script:GroupsProcessAll) {
+                $q = "Process group '$($g.DisplayName)' (Kind=$($g.Kind))? [Y]es/[N]o/[A]ll/[Q]uit"
+                $ans = Read-Host $q; Write-Log -Level 'PROMPT' -Message ($q + " -> [" + $ans + "]")
+                switch (($ans + '').Trim().ToUpper()) { 'A' { $script:GroupsProcessAll=$true } 'Q' { $script:QuitRequested=$true; $proceedGroup=$false } 'N' { $proceedGroup=$false } default { $proceedGroup=$true } }
+            }
+            if ($script:QuitRequested) { break }
+            if (-not $proceedGroup) { continue }
             $res = New-ADGroupIfMissing -DisplayName $g.DisplayName -Kind $g.Kind -TargetOU $DefaultOU
             if ($res -and $res.Group) {
                 $groupMap[$g.Id] = $res.Group
                 if ($res.Created) { $script:Summary['GroupsCreated']++ } else { $script:Summary['GroupsExisting']++ }
             }
         }
-        Write-Log -Level 'ACTION' -Message 'Reconciling group memberships...'
-        foreach ($g in $groups) {
+        if ($script:ModeMemberships -ne 'Skip' -and -not $script:QuitRequested) {
+            Write-Log -Level 'ACTION' -Message 'Reconciling group memberships...'
+            foreach ($g in $groups) {
             if (-not $groupMap.ContainsKey($g.Id)) { continue }
             $targetG = $groupMap[$g.Id]
             $memberUpns = Get-EntraGroupMembersViaGraph -GroupId $g.Id
-            $mres = Set-AdGroupMemberships -Group $targetG -MemberUpns $memberUpns
-            if ($mres) {
-                Write-Log -Level 'INFO' -Message ("Memberships set for {0}: +{1}/-{2}" -f $targetG.SamAccountName, $mres.Added, $mres.Removed)
-                $script:Summary['GroupMembersAdded'] += [int]$mres.Added
-                $script:Summary['GroupMembersRemoved'] += [int]$mres.Removed
+                if ($script:ModeMemberships -eq 'Prompt' -and -not $script:MembershipsProcessAll) {
+                    # Dry compute current vs desired to present counts
+                    # We reuse Set-AdGroupMemberships logic by precomputing differences here would duplicate code; prompt with counts from API calls
+                    $apply = $true
+                    $msg = "Apply membership changes to group '$($targetG.SamAccountName)'? [Y]es/[N]o/[A]ll/[Q]uit"
+                    $ans2 = Read-Host $msg; Write-Log -Level 'PROMPT' -Message ($msg + " -> [" + $ans2 + "]")
+                    switch (($ans2 + '').Trim().ToUpper()) { 'A' { $script:MembershipsProcessAll=$true } 'Q' { $script:QuitRequested=$true; $apply=$false } 'N' { $apply=$false } default { $apply=$true } }
+                    if (-not $apply) { continue }
+                }
+                $memberUpns = @(Get-EntraGroupMembersViaGraph -GroupId $g.Id)
+                if ($null -eq $memberUpns) { $memberUpns = @() }
+                $mres = Set-AdGroupMemberships -Group $targetG -MemberUpns $memberUpns
+                if ($mres) {
+                    Write-Log -Level 'INFO' -Message ("Memberships set for {0}: +{1}/-{2}" -f $targetG.SamAccountName, $mres.Added, $mres.Removed)
+                    $script:Summary['GroupMembersAdded'] += [int]$mres.Added
+                    $script:Summary['GroupMembersRemoved'] += [int]$mres.Removed
+                }
             }
         }
     } catch { Write-Log -Level 'ERROR' -Message ("Group sync failed: {0}" -f $_.Exception.Message) }

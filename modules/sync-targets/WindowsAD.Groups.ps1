@@ -78,7 +78,7 @@ function New-ADGroupIfMissing {
 function Set-AdGroupMemberships {
     param(
         [Parameter(Mandatory=$true)]$Group,
-        [Parameter(Mandatory=$true)][string[]]$MemberUpns
+        [string[]]$MemberUpns = @()
     )
     # Resolve UPNs to AD users
     $membersDns = @()

@@ -64,7 +64,7 @@ function Import-GraphModules {
         }
     }
     foreach ($m in $required) { Import-Module $m -ErrorAction Stop }
-    Write-Log -Level 'INFO' -Message ("Imported Graph submodules: {0}" -f ($required -join ', '))
+    #Write-Log -Level 'INFO' -Message ("Imported Graph submodules: {0}" -f ($required -join ', '))
 }
 
 function Test-GraphCommands {
