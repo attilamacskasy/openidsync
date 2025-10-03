@@ -412,7 +412,9 @@ function Get-EntraGroupsViaGraph {
     foreach ($g in $groups) {
         $isUnified = $false
         try { if ($g.GroupTypes -and ($g.GroupTypes -contains 'Unified')) { $isUnified = $true } } catch {}
-        $kind = if ($isUnified) { 'M365' } elseif ($g.SecurityEnabled) { 'Security' } else { 'Other' }
+        $isDistribution = $false
+        try { if (-not $g.SecurityEnabled -and $g.MailEnabled) { $isDistribution = $true } } catch {}
+        $kind = if ($isUnified) { 'M365' } elseif ($g.SecurityEnabled) { 'Security' } elseif ($isDistribution) { 'Distribution' } else { 'Other' }
         $rows += [pscustomobject]@{
             Id = [string]$g.Id
             DisplayName = [string]$g.DisplayName

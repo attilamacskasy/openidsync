@@ -21,16 +21,23 @@ function Convert-DisplayNameToSam {
         [string]$Prefix = ''
     )
     $name = Remove-Diacritics -InputString $DisplayName
-    # Replace whitespace with underscore
+    # Replace dots and whitespace with underscore
+    $name = ($name -replace '\.', '_')
     $name = ($name -replace '\s+', '_')
-    # Keep only safe ASCII characters
-    $name = $name -replace "[^A-Za-z0-9_\-\.]", ''
+    # Replace any non safe ASCII with underscore
+    $name = $name -replace "[^A-Za-z0-9_\-]", '_'
+    # Collapse multiple underscores and trim
+    $name = ($name -replace '_+', '_').Trim('_')
     # Prepend prefix
     $sam = "$Prefix$name"
+    # Collapse multiple underscores and trim underscores
+    $sam = ($sam -replace '_+', '_').Trim('_')
     # Trim to sAMAccountName limit (20)
-    if ($sam.Length -gt 20) { $sam = $sam.Substring(0,20) }
+    if ($sam.Length -gt 20) { $sam = $sam.Substring(0,20).TrimEnd('_') }
     # Ensure not empty
     if ([string]::IsNullOrWhiteSpace($sam)) { $sam = 'Group_' + ([Guid]::NewGuid().ToString('N').Substring(0,6)) }
+    # Ensure we do not end with underscore
+    $sam = $sam.TrimEnd('_')
     return $sam
 }
 
@@ -45,12 +52,13 @@ function Get-AdGroupBySamOrName {
 function New-ADGroupIfMissing {
     param(
         [Parameter(Mandatory=$true)][string]$DisplayName,
-        [Parameter(Mandatory=$true)][ValidateSet('Security','M365','Other')]$Kind,
+        [Parameter(Mandatory=$true)][ValidateSet('Security','M365','Distribution','Other')]$Kind,
         [Parameter(Mandatory=$true)][string]$TargetOU,
         [string]$SecurityPrefix = 'Sec_',
-        [string]$M365Prefix = 'Team_'
+        [string]$M365Prefix = 'Team_',
+        [string]$DistributionPrefix = 'Distribution_'
     )
-    $prefix = switch ($Kind) { 'Security' { $SecurityPrefix } 'M365' { $M365Prefix } default { '' } }
+    $prefix = switch ($Kind) { 'Security' { $SecurityPrefix } 'M365' { $M365Prefix } 'Distribution' { $DistributionPrefix } default { '' } }
     $samBase = Convert-DisplayNameToSam -DisplayName $DisplayName -Prefix $prefix
     $existing = Get-AdGroupBySamOrName -Name $samBase
     if ($existing) { Write-Log -Level 'INFO' -Message ("AD Group exists: {0}" -f $existing.SamAccountName); return ([pscustomobject]@{ Group = $existing; Created = $false }) }
