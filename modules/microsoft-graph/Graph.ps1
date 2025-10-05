@@ -428,6 +428,80 @@ function Get-EntraGroupsViaGraph {
     return $rows
 }
 
+# Retrieve UPNs of Global Administrators (Directory Role: Company Administrator)
+function Get-EntraGlobalAdministratorUpns {
+    Import-GraphModules
+    Test-GraphCommands
+    $connected = $false
+    try { $ctx = Get-MgContext } catch { $ctx = $null }
+    if ($ctx) {
+        # Ensure required scope present; if not, reconnect requesting superset
+    $haveDir = $false
+        try {
+            if ($ctx.Scopes) { $haveDir = ($ctx.Scopes -contains 'Directory.Read.All') }
+        } catch {}
+        if (-not $haveDir) {
+            Write-Log -Level 'INFO' -Message 'Reconnecting Graph to acquire Directory.Read.All for role membership.'
+            $null = Connect-GraphDelegated -Scopes @('Directory.Read.All','Group.Read.All','User.Read.All')
+        }
+        $connected = $true
+    } else {
+        $connected = Connect-GraphDelegated -Scopes @('Directory.Read.All','Group.Read.All','User.Read.All')
+    }
+    if (-not $connected) { throw "Unable to connect to Microsoft Graph for directory roles." }
+    try {
+        $role = Get-MgDirectoryRole -All -ErrorAction Stop | Where-Object { $_.DisplayName -eq 'Company Administrator' -or $_.DisplayName -eq 'Global Administrator' } | Select-Object -First 1
+        if (-not $role) { Write-Log -Level 'WARN' -Message 'Global Administrator (Company Administrator) role not found or not activated.'; return @() }
+        $rawMembers = Get-MgDirectoryRoleMember -DirectoryRoleId $role.Id -All -ErrorAction Stop
+        if (-not $rawMembers) { Write-Log -Level 'INFO' -Message 'Global Admin role has zero members reported.'; return @() }
+        # Use a HashSet for uniqueness (instantiate via generic type syntax for PS 5.1)
+        $userUpns = [System.Collections.Generic.HashSet[string]]::new()
+        $groupIds = @()
+        $directUserAdds = 0
+        foreach ($m in $rawMembers) {
+            $odata = $null; try { $odata = $m.AdditionalProperties['@odata.type'] } catch {}
+            if (-not $odata -and $m.PSObject.Properties.Name -contains '@odata.type') { $odata = $m.'@odata.type' }
+            switch ($odata) {
+                '#microsoft.graph.user' {
+                    $upn = $null
+                    try { $upn = [string]$m.UserPrincipalName } catch {}
+                    if (-not $upn) { try { $upn = [string]$m.AdditionalProperties['userPrincipalName'] } catch {} }
+                    if ($upn -and -not [string]::IsNullOrWhiteSpace($upn)) {
+                        if ($userUpns.Add($upn)) { $directUserAdds++ } }
+                }
+                '#microsoft.graph.group' {
+                    try { $groupIds += [string]$m.Id } catch {}
+                }
+                default { }
+            }
+        }
+        # Expand group-based role assignments (group to user expansion)
+        $groupExpansionAdds = 0
+        foreach ($gid in ($groupIds | Sort-Object -Unique)) {
+            try {
+                $gMembers = Get-MgGroupTransitiveMember -GroupId $gid -All -ErrorAction Stop
+                foreach ($gm in $gMembers) {
+                    $t = $null; try { $t = $gm.AdditionalProperties['@odata.type'] } catch {}
+                    if ($t -eq '#microsoft.graph.user') {
+                        $upn2 = $null
+                        try { $upn2 = [string]$gm.AdditionalProperties['userPrincipalName'] } catch {}
+                        if (-not $upn2) { try { $upn2 = [string]$gm.UserPrincipalName } catch {} }
+                        if ($upn2 -and -not [string]::IsNullOrWhiteSpace($upn2)) { if ($userUpns.Add($upn2)) { $groupExpansionAdds++ } }
+                    }
+                }
+            } catch {
+                Write-Log -Level 'WARN' -Message ("Failed expanding role-assigned group ${gid}: $($_.Exception.Message)")
+            }
+        }
+        $final = $userUpns | Sort-Object -Unique
+        Write-Log -Level 'INFO' -Message ("Global Admin expansion: DirectAdds={0} GroupAdds={1} Groups={2} UniqueUsers={3}" -f $directUserAdds, $groupExpansionAdds, ($groupIds | Sort-Object -Unique).Count, $final.Count)
+        return $final
+    } catch {
+        Write-Log -Level 'ERROR' -Message "Failed to retrieve Global Administrator role members: $($_.Exception.Message)"
+        return @()
+    }
+}
+
 # Fetch user UPNs for a given group
 function Get-EntraGroupMembersViaGraph {
     param([Parameter(Mandatory=$true)][string]$GroupId)

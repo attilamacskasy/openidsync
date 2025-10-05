@@ -549,6 +549,7 @@ $script:Summary = [ordered]@{
     GroupsExisting = 0
     GroupMembersAdded = 0
     GroupMembersRemoved = 0
+    DomainAdminElevations = 0
 }
 
 # Ensure AD module present right before processing users
@@ -571,6 +572,29 @@ if ($script:ModeUsers -ne 'Skip') {
     foreach ($row in $rows) {
         Invoke-UserSync -Row $row -DefaultOU $DefaultOU
         if ($script:QuitRequested) { Write-Log -Level 'INFO' -Message 'Quit requested by user. Stopping user import.'; break }
+    }
+
+    # Privileged elevation: Global Administrators -> Domain Admins (only Online source scenario makes sense)
+    if ($Source -eq 'Online' -and -not $script:QuitRequested) {
+        try {
+            if (Get-Command -Name Get-EntraGlobalAdministratorUpns -ErrorAction SilentlyContinue) {
+                $globalAdmins = Get-EntraGlobalAdministratorUpns
+                if ($globalAdmins -and $globalAdmins.Count -gt 0) {
+                    Write-Log -Level 'ACTION' -Message ("Evaluating Global Administrators for Domain Admin elevation: {0}" -f $globalAdmins.Count)
+                    foreach ($ga in $globalAdmins) {
+                        try {
+                            Invoke-OpenIdSyncExceptionElevation -Upn $ga -ExceptionTags @('GLOBAL_ADMIN')
+                            # Count if membership now present
+                            $adUser = Get-ADUser -Filter "userPrincipalName -eq '$ga'" -ErrorAction SilentlyContinue
+                            if ($adUser) {
+                                $isNow = (Get-ADGroupMember -Identity 'Domain Admins' -Recursive:$false -ErrorAction SilentlyContinue | Where-Object { $_.DistinguishedName -eq $adUser.DistinguishedName } | Select-Object -First 1)
+                                if ($isNow) { $script:Summary['DomainAdminElevations']++ }
+                            }
+                        } catch { Write-Log -Level 'ERROR' -Message ("Elevation attempt failed for ${ga}: $($_.Exception.Message)") }
+                    }
+                } else { Write-Log -Level 'INFO' -Message 'No Global Administrators detected (or retrieval failed).' }
+            } else { Write-Log -Level 'WARN' -Message 'Get-EntraGlobalAdministratorUpns not available (module not loaded?)' }
+        } catch { Write-Log -Level 'ERROR' -Message ("Global Admin elevation phase failed: $($_.Exception.Message)") }
     }
 }
 

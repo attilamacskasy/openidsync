@@ -52,4 +52,34 @@ function Get-NextDescription {
     return "[Last update: $ts] [Update count: $count] [Source: $src] [openidsync.org]"
 }
 
+# Exception elevation logic: ensure specific users (e.g., Global Administrators) are members of Domain Admins
+function Invoke-OpenIdSyncExceptionElevation {
+    param(
+        [Parameter(Mandatory=$true)][string]$Upn,
+        [Parameter(Mandatory=$true)][string[]]$ExceptionTags,
+        [string]$DomainAdminsGroup = 'Domain Admins'
+    )
+    try {
+        if (-not $ExceptionTags -or $ExceptionTags.Count -eq 0) { return }
+        # Present strategy: only tag we recognize now is 'GLOBAL_ADMIN'
+        $needsDomainAdmin = $ExceptionTags -contains 'GLOBAL_ADMIN'
+        if (-not $needsDomainAdmin) { return }
+        $user = Get-ADUser -Filter "userPrincipalName -eq '$Upn'" -ErrorAction SilentlyContinue
+        if (-not $user) { return }
+        $da = Get-ADGroup -Filter "name -eq '$DomainAdminsGroup'" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $da) { Write-Log -Level 'WARN' -Message "Domain Admins group not found: $DomainAdminsGroup"; return }
+        $isMember = $false
+        try {
+            $members = Get-ADGroupMember -Identity $da.DistinguishedName -Recursive:$false -ErrorAction SilentlyContinue
+            if ($members) { $isMember = $members | Where-Object { $_.DistinguishedName -eq $user.DistinguishedName } | ForEach-Object { $true } | Select-Object -First 1 }
+        } catch {}
+        if (-not $isMember) {
+            try {
+                Add-ADGroupMember -Identity $da.DistinguishedName -Members $user.DistinguishedName -ErrorAction Stop
+                Write-Log -Level 'RESULT' -Message "Elevated (GLOBAL_ADMIN) $Upn -> Domain Admins"
+            } catch { Write-Log -Level 'ERROR' -Message "Failed to add $Upn to Domain Admins: $($_.Exception.Message)" }
+        }
+    } catch { Write-Log -Level 'ERROR' -Message "Exception elevation failure for ${Upn}: $($_.Exception.Message)" }
+}
+
 
