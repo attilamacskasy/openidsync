@@ -28,6 +28,54 @@ Purpose: Spin up a new on‑premises Active Directory forest and interactively s
 	- Linux‑style default filenames: `openidsync.log` and `openidsync-credentials.csv`.
 	- Configurable via `LoggingConfig` in `00_OpenIDSync_Config.json`; defaults to file‑only.
 
+### New Features (Groups, Memberships, Privileged Elevation, Multi-Target Prep)
+- Group Synchronization (Entra → AD):
+	- Creates corresponding AD groups for Entra Security, M365 (Unified), and Distribution groups.
+	- Prefix policy: `Sec_` for Security, `Team_` for M365 (Unified), `Distribution_` for Distribution lists; `Other` groups keep original root.
+	- Name normalization pipeline: removes Hungarian / accented diacritics, replaces spaces & dots with underscores, strips non `[A-Za-z0-9_]`, collapses repeated `_`, trims to 20 chars (AD `sAMAccountName` limit), removes trailing underscores.
+	- Safely skips creation if normalized `sAMAccountName` already exists.
+- Group Membership Parity:
+	- For each mapped group, resolves Entra members (users only) and enforces exact membership in AD (adds missing, removes extraneous) with per-group logging: `Memberships set for <Group>: +X/-Y`.
+	- Interactive membership mode options: `[A]ll / [P]rompt / [S]kip` plus `[Q]uit` early abort.
+- Execution Modes Framework:
+	- For Users, Groups, Memberships individually: `All`, `Prompt`, or `Skip` (each selectable interactively or via `SyncModes` in JSON for background runs).
+	- Interactive menu now includes a `[Q]uit (abort run)` option at each stage.
+- Global Administrator Elevation Logic (Exception Policy v1):
+	- Detects Global Administrators (Company Administrator directory role) from Entra.
+	- Expands group-assigned role memberships (transitive expansion) to individual user UPNs.
+	- Ensures each detected Global Admin’s AD counterpart is added to `Domain Admins` (idempotent) and counts successful/confirmed elevations (`DomainAdminElevations`).
+	- Logs individual elevation actions with `RESULT` level: `Elevated (GLOBAL_ADMIN) user@domain -> Domain Admins`.
+	- Designed for future extension to additional role → group mappings.
+- Dynamic Source / Target Labels:
+	- Display & logging no longer hardcode “Microsoft Entra ID” / “Windows Active Directory”.
+	- New `-Target` parameter (currently defaults to `WindowsAD`), paving way for additional targets (e.g., Keycloak, other LDAP, cloud directories).
+- Early Quit Options Everywhere:
+	- Per-group and per-membership reconciliation prompts accept `[Q]uit` for immediate, clean abort with summary of actions taken so far.
+
+### Summary Counters Extended
+- Added: `GroupsCreated`, `GroupsExisting`, `GroupMembersAdded`, `GroupMembersRemoved`, `DomainAdminElevations`.
+- All counters dynamically included in the end-of-run summary (only non-zero displayed).
+
+### Internal Architecture Enhancements
+- Modular Domain-Driven Layout under `modules/`:
+	- `microsoft-graph/Graph.ps1`: Graph connectivity + user, group, role/member queries.
+	- `sync-targets/WindowsAD.ps1`: User provisioning/update logic.
+	- `sync-targets/WindowsAD.Groups.ps1`: Group provisioning + membership parity.
+	- `ad/ActiveDirectory.ps1`: AD helper + elevation exception orchestration.
+	- `common/*`: Config load/save, summary builder, canonical contracts scaffolding.
+- Exception Elevation Framework: Central function `Invoke-OpenIdSyncExceptionElevation` takes UPN + tag list (currently recognizes `GLOBAL_ADMIN`).
+- HashSet-Based De-duplication: Global Admin expansion uses a .NET `HashSet[string]` to ensure unique UPNs before elevation enforcement.
+
+### Planned / Roadmap (Not Yet Implemented)
+- Multi-source providers: Keycloak, AWS IAM Identity Center, GCP Cloud Identity, OCI IAM (placeholders present in `sync-sources/Providers.ps1`).
+- Multi-target adapters: Additional target backends beyond Windows AD.
+- Collision handling for normalized group name conflicts (suffix strategy).
+- Dry-run mode for group & membership sync (preview diffs without applying).
+- Enhanced exception policies (e.g., Exchange Admin → specific AD group, Teams Admin → delegated group).
+- Canonical object orchestration (wiring `Contracts.ps1` + `Orchestrator.ps1` end-to-end for any-source → any-target transforms).
+
+---
+
 ## Quick reference (how to use it in a nutshell)
 Run these in an elevated Windows PowerShell (5.1) prompt from the repo folder.
 
