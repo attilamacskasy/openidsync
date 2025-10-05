@@ -3,6 +3,8 @@
     [string]$DefaultOU,
     [ValidateSet('CSV','Online')]
     [string]$Source,
+    # Future: support multiple targets (e.g., WindowsAD, Keycloak, OtherDirectory)
+    [string]$Target = 'WindowsAD',
     [Alias('Batch','NoPrompt')]
     [switch]$NonInteractive,
     [Alias('All','ProcessAll')]
@@ -30,6 +32,7 @@ $script:SourceFromConfig = $false
 $script:ModeUsers = 'All'
 $script:ModeGroups = 'All'
 $script:ModeMemberships = 'All'
+$script:Target = $Target
 $script:GroupsProcessAll = $false
 $script:MembershipsProcessAll = $false
 
@@ -272,24 +275,33 @@ if ([string]::IsNullOrWhiteSpace($Source)) {
     }
 }
 
+# Compute friendly labels for source & target
+$sourceFriendly = switch ($Source) { 'Online' { 'Microsoft Entra ID' } 'CSV' { 'CSV File' } default { $Source } }
+$targetFriendly = switch (($Target + '').ToUpper()) { 'WINDOWSAD' { 'Windows Active Directory' } default { $Target } }
+$script:SourceFriendly = $sourceFriendly
+$script:TargetFriendly = $targetFriendly
+
 # Interactive menu for modes (only when not NonInteractive)
 if (-not $script:NonInteractive) {
-    Write-Host ""; Write-Host "Source: Microsoft Entra ID" -ForegroundColor Cyan
-    Write-Host "Target: Windows Active Directory" -ForegroundColor Cyan
-    Write-Host ""; Write-Host "1 Users? (select from list above)" -ForegroundColor Cyan
-    Write-Host "  1.1. [A]ll users (default)"; Write-Host "  1.2. [P]rompt for each user"; Write-Host "  1.3. [S]kip Users (no user sync)"
-    $ans1 = Read-Host "Choose Users mode [A/P/S] (default: A)"
-    switch (($ans1 + '').Trim().ToUpper()) { 'P' { $script:ModeUsers='Prompt' } 'S' { $script:ModeUsers='Skip' } default { $script:ModeUsers='All' } }
+    Write-Host ""; Write-Host ("Source: {0}" -f $sourceFriendly) -ForegroundColor Cyan
+    Write-Host ("Target: {0}" -f $targetFriendly) -ForegroundColor Cyan
+    Write-Host ""; Write-Host "1. Users Synchronization" -ForegroundColor Cyan
+    Write-Host "  1.1. [A]ll users (default)"; Write-Host "  1.2. [P]rompt for each user"; Write-Host "  1.3. [S]kip Users (no user sync)"; Write-Host "  1.4. [Q]uit (abort run)"
+    $ans1 = Read-Host "Choose Users mode [A/P/S/Q] (default: A)"
+    switch (($ans1 + '').Trim().ToUpper()) { 'P' { $script:ModeUsers='Prompt' } 'S' { $script:ModeUsers='Skip' } 'Q' { $script:QuitRequested=$true } default { $script:ModeUsers='All' } }
+    if ($script:QuitRequested) { Write-Log -Level 'INFO' -Message 'Quit selected at Users mode menu.'; return }
 
-    Write-Host ""; Write-Host "2 Groups?" -ForegroundColor Cyan
-    Write-Host "  2.1. [A]ll groups"; Write-Host "  2.2. [P]rompt for each group"; Write-Host "  2.3. [S]kip Groups (no group sync)"
-    $ans2 = Read-Host "Choose Groups mode [A/P/S] (default: A)"
-    switch (($ans2 + '').Trim().ToUpper()) { 'P' { $script:ModeGroups='Prompt' } 'S' { $script:ModeGroups='Skip' } default { $script:ModeGroups='All' } }
+    Write-Host ""; Write-Host "2. Groups Synchronization" -ForegroundColor Cyan
+    Write-Host "  2.1. [A]ll groups"; Write-Host "  2.2. [P]rompt for each group"; Write-Host "  2.3. [S]kip Groups (no group sync)"; Write-Host "  2.4. [Q]uit (abort run)"
+    $ans2 = Read-Host "Choose Groups mode [A/P/S/Q] (default: A)"
+    switch (($ans2 + '').Trim().ToUpper()) { 'P' { $script:ModeGroups='Prompt' } 'S' { $script:ModeGroups='Skip' } 'Q' { $script:QuitRequested=$true } default { $script:ModeGroups='All' } }
+    if ($script:QuitRequested) { Write-Log -Level 'INFO' -Message 'Quit selected at Groups mode menu.'; return }
 
-    Write-Host ""; Write-Host "3 Group memberships?" -ForegroundColor Cyan
-    Write-Host "  3.1. [A]ll memberships"; Write-Host "  3.2. [P]rompt for each membership"; Write-Host "  3.3. [S]kip memberships (no memberships sync)"
-    $ans3 = Read-Host "Choose Memberships mode [A/P/S] (default: A)"
-    switch (($ans3 + '').Trim().ToUpper()) { 'P' { $script:ModeMemberships='Prompt' } 'S' { $script:ModeMemberships='Skip' } default { $script:ModeMemberships='All' } }
+    Write-Host ""; Write-Host "3. Group Memberships Synchronization" -ForegroundColor Cyan
+    Write-Host "  3.1. [A]ll memberships"; Write-Host "  3.2. [P]rompt for each membership"; Write-Host "  3.3. [S]kip memberships (no memberships sync)"; Write-Host "  3.4. [Q]uit (abort run)"
+    $ans3 = Read-Host "Choose Memberships mode [A/P/S/Q] (default: A)"
+    switch (($ans3 + '').Trim().ToUpper()) { 'P' { $script:ModeMemberships='Prompt' } 'S' { $script:ModeMemberships='Skip' } 'Q' { $script:QuitRequested=$true } default { $script:ModeMemberships='All' } }
+    if ($script:QuitRequested) { Write-Log -Level 'INFO' -Message 'Quit selected at Memberships mode menu.'; return }
 }
 
 # Guard: NonInteractive cannot create app interactively
@@ -347,12 +359,13 @@ $funcCapMsg = "MaximumFunctionCount in use: $MaximumFunctionCount"
 Write-Log -Level 'INFO' -Message $funcCapMsg
 if ($Source -eq 'Online') {
     Show-Welcome -Source $Source
-    Write-Log -Level 'INFO' -Message "Source: Online (Microsoft Graph)"
+    Write-Log -Level 'INFO' -Message ("Source: {0} (Online)" -f $sourceFriendly)
     $script:SourceLabel = 'Online'
 } else {
-    Write-Log -Level 'INFO' -Message "Source: CSV ($CsvPath)"
-    $script:SourceLabel = 'CSV'
+    Write-Log -Level 'INFO' -Message ("Source: {0} ($CsvPath)" -f $sourceFriendly)
+    $script:SourceLabel = $Source
 }
+Write-Log -Level 'INFO' -Message ("Target: {0}" -f $targetFriendly)
 Write-Log -Level 'INFO' -Message "Default OU: $DefaultOU"
 
 if ($Source -eq 'Online') {
@@ -464,7 +477,8 @@ try {
     $summaryLines = @(
         ('{0,-26}: {1}' -f 'Main Config', $cfgMainPath),
         ('{0,-26}: {1}' -f 'Online Config', $cfgOnlinePath),
-        ('{0,-26}: {1}' -f 'Source', $Source),
+    ('{0,-26}: {1}' -f 'Source', $sourceFriendly),
+    ('{0,-26}: {1}' -f 'Target', $targetFriendly),
         ('{0,-26}: {1}' -f 'Default OU', $DefaultOU),
         ('{0,-26}: {1}' -f 'Users Mode', $script:ModeUsers),
         ('{0,-26}: {1}' -f 'Groups Mode', $script:ModeGroups),
