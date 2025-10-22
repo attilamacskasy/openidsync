@@ -5,7 +5,7 @@
 #>
 param(
     [string]$Source      = 'C:\Users\Attila\Desktop\Code\openidsync',
-    [string]$Destination = '\\172.22.20.1\c$\Users\Administrator\Desktop\Code\openidsync',
+    [string]$Destination = '\\172.22.20.1\c$\openidsync',
     [string]$LogDir      = 'C:\Users\Attila\Desktop\Code\openidsync\rclone-deploy\log',
     # If rclone.exe is not in PATH, set the full path here (e.g. 'C:\Program Files\rclone\rclone.exe')
     [string]$Rclone      = 'rclone.exe'

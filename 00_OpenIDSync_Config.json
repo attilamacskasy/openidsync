@@ -16,7 +16,7 @@
         "MinPSDscResources": "2.12.0.0"
     },
     "UserSyncConfig": {
-        "CsvPath": ".\\users_9_15_2025 9_17_18 PM.csv",
+        "CsvPath": "",
         "DefaultOU": "CN=Users,DC=macskasy,DC=com",
         "PreferredSource": "Online",
         "SuggestRemovals": true,
