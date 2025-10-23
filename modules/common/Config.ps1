@@ -47,50 +47,10 @@ function ConvertTo-PrettyJson {
         [int]$Depth = 16
     )
 
-    $compressed = $InputObject | ConvertTo-Json -Depth $Depth -Compress
-    $builder = New-Object System.Text.StringBuilder
-    $indentLevel = 0
-    $inString = $false
-    $escape = $false
-    $indentStr = ' ' * $Indent
+    if ($null -eq $InputObject) { return '{}' }
 
-    foreach ($char in $compressed.ToCharArray()) {
-        if ($escape) {
-            [void]$builder.Append($char)
-            $escape = $false
-            continue
-        }
-        switch ($char) {
-            '\\' {
-                [void]$builder.Append($char)
-                if ($inString) { $escape = $true }
-                continue
-            }
-            '"' {
-                [void]$builder.Append($char)
-                $inString = -not $inString
-                continue
-            }
-        }
-
-        if ($inString) {
-            [void]$builder.Append($char)
-            continue
-        }
-
-        switch ($char) {
-            '{' { [void]$builder.AppendLine('{'); $indentLevel++; [void]$builder.Append($indentStr * $indentLevel); continue }
-            '[' { [void]$builder.AppendLine('['); $indentLevel++; [void]$builder.Append($indentStr * $indentLevel); continue }
-            '}' { $indentLevel--; [void]$builder.AppendLine(); [void]$builder.Append($indentStr * $indentLevel); [void]$builder.Append('}'); continue }
-            ']' { $indentLevel--; [void]$builder.AppendLine(); [void]$builder.Append($indentStr * $indentLevel); [void]$builder.Append(']'); continue }
-            ',' { [void]$builder.Append(','); [void]$builder.AppendLine(); [void]$builder.Append($indentStr * $indentLevel); continue }
-            ':' { [void]$builder.Append(': '); continue }
-            ' ' { continue }
-            default { [void]$builder.Append($char); continue }
-        }
-    }
-
-    return $builder.ToString().TrimEnd()
+    $json = $InputObject | ConvertTo-Json -Depth $Depth
+    return $json.TrimEnd()
 }
 
 function Save-OnlineSyncConfig {
@@ -126,9 +86,13 @@ function Save-OnlineSyncConfig {
         $ordered.OnlineSyncConfig = ConvertTo-OrderedObject -Object $cfgObj.OnlineSyncConfig -PreferredOrder @('AppRegistrationName','TenantId','ClientId','SpObjectId','ClientSecretEnvVar')
         $json = ConvertTo-PrettyJson -InputObject $ordered -Depth 16
         $json | Out-File -FilePath $OnlineConfigPath -Encoding UTF8 -Force
-        Write-Log -Level 'INFO' -Message "Saved OnlineSyncConfig (no secrets) to: $OnlineConfigPath"
+        if (Get-Command -Name Write-Log -ErrorAction SilentlyContinue) {
+            try { Write-Log -Level 'INFO' -Message "Saved OnlineSyncConfig (no secrets) to: $OnlineConfigPath" } catch {}
+        }
     } catch {
-        Write-Log -Level 'WARN' -Message "Failed to save OnlineSyncConfig: $($_.Exception.Message)"
+        if (Get-Command -Name Write-Log -ErrorAction SilentlyContinue) {
+            try { Write-Log -Level 'WARN' -Message "Failed to save OnlineSyncConfig: $($_.Exception.Message)" } catch {}
+        }
     }
 }
 

@@ -96,6 +96,47 @@ function Test-GraphCommands {
     }
 }
 
+function Get-GraphErrorInfo {
+    param(
+        [Parameter(Mandatory = $true)][System.Management.Automation.ErrorRecord]$ErrorRecord
+    )
+
+    $info = [ordered]@{ Code = $null; Message = $null }
+    $payloads = @()
+
+    try {
+        if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) {
+            $payloads += $ErrorRecord.ErrorDetails.Message
+        }
+        if ($ErrorRecord.Exception -and $ErrorRecord.Exception.Message) {
+            $payloads += $ErrorRecord.Exception.Message
+        }
+    } catch {}
+
+    foreach ($text in $payloads) {
+        if (-not $text) { continue }
+        $parsed = $null
+        try { $parsed = $text | ConvertFrom-Json -ErrorAction Stop } catch {}
+        if ($parsed) {
+            if ($parsed.error) {
+                if (-not $info.Code -and $parsed.error.code) { $info.Code = [string]$parsed.error.code }
+                if (-not $info.Message -and $parsed.error.message) { $info.Message = [string]$parsed.error.message }
+            }
+            else {
+                if (-not $info.Code -and $parsed.PSObject.Properties.Match('code')) { $info.Code = [string]$parsed.code }
+                if (-not $info.Message -and $parsed.PSObject.Properties.Match('message')) { $info.Message = [string]$parsed.message }
+            }
+        }
+        else {
+            if (-not $info.Message) { $info.Message = $text }
+            if (-not $info.Code -and ($text -match '"code"\s*:\s*"([^"\\]+)"')) { $info.Code = $matches[1] }
+        }
+        if ($info.Code -and $info.Message) { break }
+    }
+
+    return [pscustomobject]$info
+}
+
 function Get-GraphAppPermissionStatus {
     param(
         [Parameter(Mandatory=$true)][string]$TenantId,
@@ -160,6 +201,228 @@ function Get-GraphAppPermissionStatus {
     return [pscustomobject]$result
 }
 
+function Test-GraphReadOperations {
+    param(
+        [Parameter(Mandatory=$true)][string]$TenantId,
+        [Parameter(Mandatory=$true)][string]$ClientId,
+        [Parameter(Mandatory=$true)][string]$ClientSecret,
+        [string]$OnlineConfigPath,
+        [switch]$ForceRefresh
+    )
+
+    $result = [ordered]@{
+        Success        = $false
+        Error          = $null
+        AuthMode       = $null
+        Tests          = @()
+        FromCache      = $false
+        CacheTimestamp = $null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($TenantId) -or [string]::IsNullOrWhiteSpace($ClientId)) {
+        $result.Error = 'TenantId or ClientId missing.'
+        return [pscustomobject]$result
+    }
+    if ([string]::IsNullOrWhiteSpace($ClientSecret)) {
+        $result.Error = 'Client secret missing. Set the environment variable to verify permissions.'
+        return [pscustomobject]$result
+    }
+
+    $cacheObject = $null
+    if ($OnlineConfigPath -and -not $ForceRefresh) {
+        if (Test-Path -LiteralPath $OnlineConfigPath) {
+            try {
+                $loaded = Get-Content -LiteralPath $OnlineConfigPath -Raw | ConvertFrom-Json
+                if ($loaded -and $loaded.PSObject.Properties['OnlineSyncConfig']) {
+                    $osc = $loaded.OnlineSyncConfig
+                    if ($osc -and $osc.PSObject.Properties['PermissionVerification']) {
+                        $cacheObject = $osc.PermissionVerification
+                    }
+                }
+            } catch {}
+        }
+    }
+
+    if ($cacheObject) {
+        $usersOk = $cacheObject.Users -and $cacheObject.Users.Success
+        $groupsOk = $cacheObject.Groups -and $cacheObject.Groups.Success
+        $membersOk = $cacheObject.Memberships -and $cacheObject.Memberships.Success
+        if ($usersOk -and $groupsOk -and $membersOk) {
+            $result.Success = $true
+            $result.FromCache = $true
+            if ($cacheObject.PSObject.Properties['LastUpdated']) { $result.CacheTimestamp = [string]$cacheObject.LastUpdated }
+            $tests = @()
+            if ($cacheObject.Users) {
+                $tests += [pscustomobject]@{
+                    Name      = 'Users'
+                    Success   = [bool]$cacheObject.Users.Success
+                    Skipped   = $false
+                    Count     = if ($cacheObject.Users.PSObject.Properties['Count']) { [int]$cacheObject.Users.Count } else { 0 }
+                    Message   = [string]$cacheObject.Users.Message
+                    Error     = $null
+                    Cached    = $true
+                    Timestamp = if ($cacheObject.Users.PSObject.Properties['Timestamp']) { [string]$cacheObject.Users.Timestamp } else { $null }
+                }
+            }
+            if ($cacheObject.Groups) {
+                $tests += [pscustomobject]@{
+                    Name      = 'Groups'
+                    Success   = [bool]$cacheObject.Groups.Success
+                    Skipped   = $false
+                    Count     = if ($cacheObject.Groups.PSObject.Properties['Count']) { [int]$cacheObject.Groups.Count } else { 0 }
+                    Message   = [string]$cacheObject.Groups.Message
+                    Error     = $null
+                    Cached    = $true
+                    Timestamp = if ($cacheObject.Groups.PSObject.Properties['Timestamp']) { [string]$cacheObject.Groups.Timestamp } else { $null }
+                }
+            }
+            if ($cacheObject.Memberships) {
+                $tests += [pscustomobject]@{
+                    Name      = 'GroupMembers'
+                    Success   = [bool]$cacheObject.Memberships.Success
+                    Skipped   = [bool]$cacheObject.Memberships.Skipped
+                    Count     = if ($cacheObject.Memberships.PSObject.Properties['Count']) { [int]$cacheObject.Memberships.Count } else { 0 }
+                    Message   = [string]$cacheObject.Memberships.Message
+                    Error     = $null
+                    Cached    = $true
+                    Timestamp = if ($cacheObject.Memberships.PSObject.Properties['Timestamp']) { [string]$cacheObject.Memberships.Timestamp } else { $null }
+                }
+            }
+            $result.Tests = $tests
+            return [pscustomobject]$result
+        }
+    }
+
+    Import-GraphModules
+
+    $connected = $false
+    try {
+        $connected = Connect-GraphAppOnly -TenantId $TenantId -ClientId $ClientId -ClientSecret $ClientSecret
+    } catch {
+        $connected = $false
+        $result.Error = "Unable to connect to Microsoft Graph using client credentials: $($_.Exception.Message)"
+    }
+
+    if (-not $connected) {
+        if (-not $result.Error) { $result.Error = 'Unable to connect to Microsoft Graph using client credentials.' }
+        return [pscustomobject]$result
+    }
+
+    $result.AuthMode = 'AppOnly'
+    $tests = @()
+    $timestamp = (Get-Date).ToString('o')
+
+    $userTest = [ordered]@{ Name = 'Users'; Success = $false; Skipped = $false; Count = 0; Message = $null; Error = $null; Timestamp = $timestamp; Cached = $false }
+    try {
+        $users = Get-MgUser -Top 1 -ErrorAction Stop
+        $count = if ($users) { if ($users -is [System.Array]) { $users.Length } else { 1 } } else { 0 }
+        $userTest.Count = $count
+        $userTest.Success = $true
+        $userTest.Message = if ($count -gt 0) { 'Retrieved at least one user from Microsoft Graph.' } else { 'Graph query completed but returned no users.' }
+    } catch {
+        $info = Get-GraphErrorInfo -ErrorRecord $_
+        if ($info.Code -eq 'Authorization_RequestDenied') {
+            $userTest.Error = 'Authorization_RequestDenied: Grant admin consent for Directory.Read.All and User.Read.All on the OpenIDSync service principal (Azure Portal > Enterprise applications > Permissions).'
+        } else {
+            $userTest.Error = if ($info.Message) { $info.Message } else { $_.Exception.Message }
+        }
+    }
+    $tests += [pscustomobject]$userTest
+
+    $groupTest = [ordered]@{ Name = 'Groups'; Success = $false; Skipped = $false; Count = 0; Message = $null; Error = $null; Timestamp = $timestamp; Cached = $false }
+    $groupId = $null
+    try {
+        $groups = Get-MgGroup -Top 1 -ErrorAction Stop
+        $groupObj = $null
+        if ($groups) {
+            if ($groups -is [System.Array]) { $groupObj = $groups[0] } else { $groupObj = $groups }
+        }
+        $count = if ($groupObj) { 1 } else { 0 }
+        $groupTest.Count = $count
+        $groupTest.Success = $true
+        $groupTest.Message = if ($count -gt 0) { 'Retrieved at least one group from Microsoft Graph.' } else { 'Graph query completed but returned no groups.' }
+        if ($groupObj -and $groupObj.Id) { $groupId = $groupObj.Id }
+    } catch {
+        $info = Get-GraphErrorInfo -ErrorRecord $_
+        if ($info.Code -eq 'Authorization_RequestDenied') {
+            $groupTest.Error = 'Authorization_RequestDenied: Ensure Directory.Read.All application permission has tenant-wide admin consent.'
+        } else {
+            $groupTest.Error = if ($info.Message) { $info.Message } else { $_.Exception.Message }
+        }
+    }
+    $tests += [pscustomobject]$groupTest
+
+    $membershipTest = [ordered]@{ Name = 'GroupMembers'; Success = $false; Skipped = $false; Count = 0; Message = $null; Error = $null; Timestamp = $timestamp; Cached = $false }
+    if ($groupId) {
+        try {
+            $members = Get-MgGroupMember -GroupId $groupId -Top 1 -ErrorAction Stop
+            $count = if ($members) {
+                if ($members -is [System.Array]) { $members.Length } else { 1 }
+            } else { 0 }
+            $membershipTest.Count = $count
+            $membershipTest.Success = $true
+            $membershipTest.Message = if ($count -gt 0) { 'Retrieved at least one member from Microsoft Graph.' } else { 'Group query succeeded but no members are assigned.' }
+        } catch {
+            $info = Get-GraphErrorInfo -ErrorRecord $_
+            if ($info.Code -eq 'Authorization_RequestDenied') {
+                $membershipTest.Error = 'Authorization_RequestDenied: Admin consent for Directory.Read.All may still be pending. Re-run consent from Enterprise applications > Permissions.'
+            } else {
+                $membershipTest.Error = if ($info.Message) { $info.Message } else { $_.Exception.Message }
+            }
+        }
+    } else {
+        $membershipTest.Success = $true
+        $membershipTest.Skipped = $true
+        $membershipTest.Message = 'Skipped (no group available to test memberships).'
+    }
+    $tests += [pscustomobject]$membershipTest
+
+    $result.Tests = $tests
+    $result.Success = ($tests | Where-Object { -not $_.Success -and -not $_.Skipped }).Count -eq 0
+    if ($result.Success) { $result.CacheTimestamp = $timestamp }
+
+    if ($result.Success -and $OnlineConfigPath) {
+        $verificationPayload = [pscustomobject]@{
+            Users       = [pscustomobject]@{ Success = $userTest.Success; Message = $userTest.Message; Count = $userTest.Count; Timestamp = $userTest.Timestamp }
+            Groups      = [pscustomobject]@{ Success = $groupTest.Success; Message = $groupTest.Message; Count = $groupTest.Count; Timestamp = $groupTest.Timestamp }
+            Memberships = [pscustomobject]@{ Success = $membershipTest.Success; Message = $membershipTest.Message; Count = $membershipTest.Count; Timestamp = $membershipTest.Timestamp; Skipped = $membershipTest.Skipped }
+            LastUpdated = $timestamp
+        }
+        try {
+            $cfgObj = $null
+            if (Test-Path -LiteralPath $OnlineConfigPath) {
+                try { $cfgObj = Get-Content -LiteralPath $OnlineConfigPath -Raw | ConvertFrom-Json } catch { $cfgObj = $null }
+            }
+            if (-not $cfgObj) { $cfgObj = [pscustomobject]@{} }
+            if (-not $cfgObj.PSObject.Properties['OnlineSyncConfig']) {
+                $cfgObj | Add-Member -NotePropertyName 'OnlineSyncConfig' -NotePropertyValue ([pscustomobject]@{})
+            }
+            $osc = [pscustomobject]$cfgObj.OnlineSyncConfig
+            $osc | Add-Member -NotePropertyName 'PermissionVerification' -NotePropertyValue $verificationPayload -Force
+            $cfgObj.OnlineSyncConfig = $osc
+
+            $ordered = $cfgObj
+            if (Get-Command -Name ConvertTo-OrderedObject -ErrorAction SilentlyContinue) {
+                $ordered = ConvertTo-OrderedObject -Object $cfgObj -PreferredOrder @('OnlineSyncConfig')
+                $ordered.OnlineSyncConfig = ConvertTo-OrderedObject -Object $cfgObj.OnlineSyncConfig -PreferredOrder @('AppRegistrationName','TenantId','ClientId','SpObjectId','ClientSecretEnvVar','PermissionVerification')
+            }
+            $json = $null
+            if (Get-Command -Name ConvertTo-PrettyJson -ErrorAction SilentlyContinue) {
+                $json = ConvertTo-PrettyJson -InputObject $ordered -Depth 16
+            } else {
+                $json = $ordered | ConvertTo-Json -Depth 16
+            }
+            $json | Out-File -FilePath $OnlineConfigPath -Encoding UTF8 -Force
+        } catch {
+            if (Get-Command -Name Write-Log -ErrorAction SilentlyContinue) {
+                try { Write-Log -Level 'WARN' -Message "Failed to persist permission verification cache: $($_.Exception.Message)" } catch {}
+            }
+        }
+    }
+
+    return [pscustomobject]$result
+}
+
 function Get-TenantLicenseInfo {
     try {
         $skus = Get-MgSubscribedSku -ErrorAction SilentlyContinue
@@ -182,7 +445,7 @@ function Show-SecuritySummary {
         [switch]$AppOnly,
         [switch]$CreatingApp
     )
-    Write-Host ""; Write-Host "==== Entra ID Access & Security Summary ====" -ForegroundColor Cyan
+    Write-Host ""; Write-Host "==== Entra ID Access & Security Summary ==== " -ForegroundColor Cyan
     if ($AppOnly) {
         Write-Host "Mode: App-only (client credential flow)" -ForegroundColor Cyan
         Write-Host "Permissions: Microsoft Graph Application permissions 'User.Read.All' and 'Directory.Read.All'" -ForegroundColor Cyan
@@ -389,7 +652,7 @@ function Show-Welcome {
         $envUser = [Environment]::GetEnvironmentVariable($envName, 'User')
         $secretPresent = (-not [string]::IsNullOrWhiteSpace($envProc)) -or (-not [string]::IsNullOrWhiteSpace($envUser))
 
-        Write-Host ""; Write-Host "==== Welcome to OpenIDSync - Getting ready for daily use ====" -ForegroundColor Cyan
+        Write-Host ""; Write-Host "==== Welcome to OpenIDSync - Getting ready for daily use ==== " -ForegroundColor Cyan
         Write-Host "Online onboarding flow:"; Write-Log -Level 'INFO' -Message 'Online onboarding flow:'
         Write-Host "  1) Delegated sign-in (interactive) - first run"; Write-Log -Level 'INFO' -Message '1) Delegated sign-in (interactive) - first run'
         Write-Host ("  2) Create App Registration + Service Principal, print secret; set env var {0}" -f $envName); Write-Log -Level 'INFO' -Message ("2) Create App Registration + Service Principal, print secret; set env var {0}" -f $envName)

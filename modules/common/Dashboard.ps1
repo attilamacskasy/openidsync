@@ -3,6 +3,9 @@
 if (-not (Get-Variable -Name DashboardPermissionStatus -Scope Script -ErrorAction SilentlyContinue)) {
     $script:DashboardPermissionStatus = $null
 }
+if (-not (Get-Variable -Name DashboardOnlineVerification -Scope Script -ErrorAction SilentlyContinue)) {
+    $script:DashboardOnlineVerification = $null
+}
 
 function Get-JsonFileOrNull {
     param([string]$Path)
@@ -88,6 +91,110 @@ function Get-PasswordCredentialStatus {
     } catch {
         $result.Error = $_.Exception.Message
     }
+    return [pscustomobject]$result
+}
+
+function Get-OnlineRegistrationStatus {
+    param(
+        [string]$TenantId,
+        [string]$ClientId,
+        [string]$SpObjectId,
+        [psobject]$SecretInfo
+    )
+
+    $result = [ordered]@{
+        Attempted      = $false
+        Connected      = $false
+        UsingMode      = $null
+        AppChecked     = $false
+        AppFound       = $false
+        AppDisplayName = $null
+        SpChecked      = $false
+        SpFound        = $false
+        SpDisplayName  = $null
+        Message        = $null
+        Warning        = $null
+        Error          = $null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($TenantId) -or [string]::IsNullOrWhiteSpace($ClientId)) {
+        $result.Message = 'TenantId and ClientId required for online verification.'
+        return [pscustomobject]$result
+    }
+
+    if (-not (Get-Command -Name Import-GraphModules -ErrorAction SilentlyContinue)) {
+        $result.Error = 'Graph helpers unavailable. Install Microsoft Graph PowerShell modules (Requirement 1).' 
+        return [pscustomobject]$result
+    }
+
+    try { Import-GraphModules } catch {
+        $result.Error = "Unable to import Microsoft Graph modules: $($_.Exception.Message)"
+        return [pscustomobject]$result
+    }
+
+    $result.Attempted = $true
+
+    $ctx = $null
+    try { $ctx = Get-MgContext } catch { $ctx = $null }
+    $connected = $false
+
+    if ($ctx -and $ctx.TenantId) {
+        $connected = $true
+        $result.UsingMode = 'ExistingContext'
+    }
+
+    if (-not $connected -and $SecretInfo -and $SecretInfo.IsSet -and $SecretInfo.RawValue) {
+        try {
+            $connected = Connect-GraphAppOnly -TenantId $TenantId -ClientId $ClientId -ClientSecret $SecretInfo.RawValue
+            if ($connected) { $result.UsingMode = 'AppOnly' }
+        } catch {
+            $result.Warning = "App-only verification failed: $($_.Exception.Message)"
+        }
+    }
+
+    if (-not $connected) {
+        if (-not $result.Warning) {
+            $result.Warning = 'Connect to Microsoft Graph interactively or set the client secret environment variable to enable verification.'
+        }
+        return [pscustomobject]$result
+    }
+
+    $result.Connected = $true
+
+    try {
+        $app = Get-MgApplication -Filter "appId eq '$ClientId'" -ErrorAction Stop | Select-Object -First 1
+        $result.AppChecked = $true
+        if ($app) {
+            $result.AppFound = $true
+            $result.AppDisplayName = $app.DisplayName
+        }
+    } catch {
+        #$result.Warning = "Application lookup failed: $($_.Exception.Message)"
+    }
+
+    $result.SpChecked = $true
+    if (-not [string]::IsNullOrWhiteSpace($SpObjectId)) {
+        try {
+            $sp = Get-MgServicePrincipal -ServicePrincipalId $SpObjectId -ErrorAction Stop
+            if ($sp) {
+                $result.SpFound = $true
+                $result.SpDisplayName = $sp.DisplayName
+            }
+        } catch {
+            $result.SpFound = $false
+        }
+    } else {
+        try {
+            $sp = Get-MgServicePrincipal -Filter "appId eq '$ClientId'" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($sp) {
+                $result.SpFound = $true
+                $result.SpDisplayName = $sp.DisplayName
+            }
+        } catch {
+            $result.SpFound = $false
+        }
+    }
+
     return [pscustomobject]$result
 }
 
@@ -218,10 +325,12 @@ function Get-RequirementStatuses {
         [psobject]$BaseConfig,
         [psobject]$OnlineConfig,
         [psobject]$SecretInfo,
-        [switch]$ForcePermissionRefresh
+        [switch]$ForcePermissionRefresh,
+        [switch]$ForceOnlineRefresh
     )
 
     if ($ForcePermissionRefresh) { $script:DashboardPermissionStatus = $null }
+    if ($ForceOnlineRefresh) { $script:DashboardOnlineVerification = $null }
 
     # Requirement 1 - Graph modules
     $moduleStatus = $null
@@ -288,6 +397,10 @@ function Get-RequirementStatuses {
     $spDisplay = if ([string]::IsNullOrWhiteSpace($spObjectId)) { 'None' } else { $spObjectId }
     $hasAppRegistration = (-not [string]::IsNullOrWhiteSpace($tenantId)) -and (-not [string]::IsNullOrWhiteSpace($clientId)) -and (-not [string]::IsNullOrWhiteSpace($spObjectId))
     $req2Met = $hasAppRegistration -and $SecretInfo.IsSet
+    $onlineVerification = $null
+    if ($script:DashboardOnlineVerification -and -not $ForceOnlineRefresh) {
+        $onlineVerification = $script:DashboardOnlineVerification
+    }
     $req2Lines = @()
     $req2Lines += New-DisplayLine -Text ("App registration name: {0}" -f $appName)
     $req2Lines += New-DisplayLine -Text ("TenantId: {0}" -f $tenantDisplay)
@@ -300,6 +413,43 @@ function Get-RequirementStatuses {
     }
     if (-not $hasAppRegistration) {
         $req2Lines += New-DisplayLine -Text 'No app registration / service principal configured yet in Entra ID. Using delegated user mode (prompt for user login to bootstrap).' -ForegroundColor 'White' -BackgroundColor 'DarkRed'
+    }
+    try {
+        if (-not $onlineVerification) {
+            $onlineVerification = Get-OnlineRegistrationStatus -TenantId $tenantId -ClientId $clientId -SpObjectId $spObjectId -SecretInfo $SecretInfo
+            $script:DashboardOnlineVerification = $onlineVerification
+        }
+    } catch {
+        $onlineVerification = [pscustomobject]@{ Error = $_.Exception.Message }
+        $script:DashboardOnlineVerification = $onlineVerification
+    }
+
+    if ($onlineVerification) {
+        if ($onlineVerification.Error) {
+            $req2Lines += New-DisplayLine -Text ("Online verification: {0}" -f $onlineVerification.Error) -ForegroundColor 'Yellow'
+        } elseif (-not $onlineVerification.Attempted) {
+            if ($onlineVerification.Message) {
+                $req2Lines += New-DisplayLine -Text $onlineVerification.Message -ForegroundColor 'Yellow'
+            }
+        } else {
+            if ($onlineVerification.AppChecked) {
+                if ($onlineVerification.AppFound) {
+                    $req2Lines += New-DisplayLine -Text ("Verified application: {0}" -f $onlineVerification.AppDisplayName) -ForegroundColor 'Green'
+                } else {
+                    $req2Lines += New-DisplayLine -Text 'Verified application: NOT FOUND in Entra ID.' -ForegroundColor 'White' -BackgroundColor 'DarkRed'
+                }
+            }
+            if ($onlineVerification.SpChecked) {
+                if ($onlineVerification.SpFound) {
+                    $req2Lines += New-DisplayLine -Text ("Verified service principal: {0}" -f $onlineVerification.SpDisplayName) -ForegroundColor 'Green'
+                } else {
+                    $req2Lines += New-DisplayLine -Text 'Verified service principal: NOT FOUND in tenant.' -ForegroundColor 'White' -BackgroundColor 'DarkRed'
+                }
+            }
+            if ($onlineVerification.Warning) {
+                $req2Lines += New-DisplayLine -Text $onlineVerification.Warning -ForegroundColor 'Yellow'
+            }
+        }
     }
     $req2 = New-RequirementStatus -Id 2 -Title 'Requirement 2 - Create app registration for credential-less use' -IsMet $req2Met -Lines $req2Lines
 
@@ -316,9 +466,9 @@ function Get-RequirementStatuses {
         if ($shouldCheck) {
             if ($ForcePermissionRefresh -or -not $script:DashboardPermissionStatus) {
                 try {
-                    $permissionDetail = Get-GraphAppPermissionStatus -TenantId $tenantId -ClientId $clientId -ClientSecret $SecretInfo.RawValue
+                    $permissionDetail = Test-GraphReadOperations -TenantId $tenantId -ClientId $clientId -ClientSecret $SecretInfo.RawValue
                 } catch {
-                    $permissionDetail = [pscustomobject]@{ Success = $false; Error = $_.Exception.Message; Permissions = @() }
+                    $permissionDetail = [pscustomobject]@{ Success = $false; Error = $_.Exception.Message; Tests = @() }
                 }
                 $script:DashboardPermissionStatus = $permissionDetail
             } else {
@@ -326,22 +476,30 @@ function Get-RequirementStatuses {
             }
 
             if ($permissionDetail) {
-                if ($permissionDetail.Success) {
-                    if ($permissionDetail.Permissions.Count -gt 0) {
-                        foreach ($perm in $permissionDetail.Permissions) {
-                            $statusLabel = if ($perm.Granted) { 'GRANTED' } else { 'NOT YET GRANTED' }
-                            if ($perm.Granted) {
-                                $req3Lines += New-DisplayLine -Text ("{0} [{1}]" -f $perm.Name, $statusLabel) -ForegroundColor 'Green'
-                            } else {
-                                $req3Lines += New-DisplayLine -Text ("{0} [{1}]" -f $perm.Name, $statusLabel) -ForegroundColor 'White' -BackgroundColor 'DarkRed'
-                            }
-                        }
-                        $req3Met = ($permissionDetail.Permissions | Where-Object { -not $_.Granted }).Count -eq 0
-                    } else {
-                        $req3Lines += New-DisplayLine -Text 'No permission details returned by Microsoft Graph.' -ForegroundColor 'Yellow'
-                    }
-                } else {
+                if ($permissionDetail.Error) {
                     $req3Lines += New-DisplayLine -Text ("Unable to verify permissions: {0}" -f $permissionDetail.Error) -ForegroundColor 'White' -BackgroundColor 'DarkRed'
+                }
+                if ($permissionDetail.Tests -and $permissionDetail.Tests.Count -gt 0) {
+                    foreach ($test in $permissionDetail.Tests) {
+                        $label = switch ($test.Name) {
+                            'Users' { 'User directory read' }
+                            'Groups' { 'Group directory read' }
+                            'GroupMembers' { 'Group membership read' }
+                            default { $test.Name }
+                        }
+                        $message = if ($test.Message) { $test.Message } else { "Completed check: $label" }
+                        if ($test.Success -and -not $test.Skipped) {
+                            $req3Lines += New-DisplayLine -Text ("{0}: {1}" -f $label, $message) -ForegroundColor 'Green'
+                        } elseif ($test.Skipped) {
+                            $req3Lines += New-DisplayLine -Text ("{0}: {1}" -f $label, $message) -ForegroundColor 'Yellow'
+                        } else {
+                            $errorText = if ($test.Error) { $test.Error } else { 'Unexpected failure.' }
+                            $req3Lines += New-DisplayLine -Text ("{0}: {1}" -f $label, $errorText) -ForegroundColor 'White' -BackgroundColor 'DarkRed'
+                        }
+                    }
+                    $req3Met = ($permissionDetail.Tests | Where-Object { -not $_.Success -and -not $_.Skipped }).Count -eq 0 -and -not $permissionDetail.Error
+                } elseif (-not $permissionDetail.Error) {
+                    $req3Lines += New-DisplayLine -Text 'Permission verification did not return any test results.' -ForegroundColor 'Yellow'
                 }
             } else {
                 $req3Lines += New-DisplayLine -Text 'Permission status not checked yet. Select option 3 to verify.'
@@ -369,7 +527,8 @@ function Get-OpenIdSyncDashboardState {
         [string]$ConfigPath,
         [string]$OnlineConfigPath,
         [string]$PasswordFilePath,
-        [switch]$ForcePermissionRefresh
+        [switch]$ForcePermissionRefresh,
+        [switch]$ForceOnlineRefresh
     )
 
     $baseConfig = Get-JsonFileOrNull -Path $ConfigPath
@@ -380,7 +539,7 @@ function Get-OpenIdSyncDashboardState {
     }
     $secretInfo = Get-SecretEnvironmentInfo -PreferredName $preferredSecretName
     $passwordStatus = Get-PasswordCredentialStatus -Path $PasswordFilePath
-    $reqStatus = Get-RequirementStatuses -BaseConfig $baseConfig -OnlineConfig $onlineConfig -SecretInfo $secretInfo -ForcePermissionRefresh:$ForcePermissionRefresh
+    $reqStatus = Get-RequirementStatuses -BaseConfig $baseConfig -OnlineConfig $onlineConfig -SecretInfo $secretInfo -ForcePermissionRefresh:$ForcePermissionRefresh -ForceOnlineRefresh:$ForceOnlineRefresh
 
     $usc = $null
     if ($baseConfig -and $baseConfig.PSObject.Properties['UserSyncConfig']) { $usc = $baseConfig.UserSyncConfig }
@@ -420,6 +579,7 @@ function Get-OpenIdSyncDashboardState {
         Requirements         = $reqStatus.Items
         AllRequirementsMet   = $reqStatus.AllMet
         PermissionDetail     = $reqStatus.PermissionDetail
+        OnlineVerification   = $script:DashboardOnlineVerification
         PreferredSource      = $preferredSource
         PreferredSourceDisplay = $sourceDisplay
         UsersMode            = $usersMode
@@ -469,6 +629,30 @@ function Show-ConfigurationDetails {
             }
             Write-Host ''
         }
+    }
+
+    [void](Read-Host 'Press Enter to return to the dashboard...')
+}
+
+function Show-RequirementDetails {
+    param(
+        [psobject[]]$Requirements
+    )
+
+    if (-not $Requirements -or $Requirements.Count -eq 0) {
+        Write-Host ''
+        Write-Host 'Requirement details are not available.' -ForegroundColor Yellow
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    Write-Host ''
+    Write-Host '=== Requirement Details ===' -ForegroundColor Cyan
+    Write-Host ''
+
+    foreach ($req in $Requirements) {
+        Write-RequirementBlock -Requirement $req
+        Write-Host ''
     }
 
     [void](Read-Host 'Press Enter to return to the dashboard...')
@@ -630,21 +814,23 @@ function Write-OpenIdSyncDashboard {
     Write-ValueSegmentsLine -Prefix 'Logging file: ' -Segments $loggingSummarySegments
     Write-Host ''
 
-    foreach ($req in $State.Requirements) {
-        Write-RequirementBlock -Requirement $req
-        Write-Host ''
+    if (-not $State.AllRequirementsMet) {
+        foreach ($req in $State.Requirements) {
+            Write-RequirementBlock -Requirement $req
+            Write-Host ''
+        }
     }
 
     Write-Host 'Menu:'
     Write-Host ''
     if ($AvailableOptions -contains '1') {
-    Write-Host '  1) Fix Requirement 1 - Install PowerShell Graph API Modules [-AutoInstallGraphModules]'
+        Write-Host '  1) Fix Requirement 1 - Install PowerShell Graph API Modules [-AutoInstallGraphModules]'
     }
     if ($AvailableOptions -contains '2') {
-    Write-Host '  2) Fix Requirement 2 - Create App Registration / Service Principal for credential-less use [-AutoCreateGraphApp]'
+        Write-Host '  2) Fix Requirement 2 - Create App Registration / Service Principal for credential-less use [-AutoCreateGraphApp]'
     }
     if ($AvailableOptions -contains '3') {
-    Write-Host '  3) Fix Requirement 3 - Check if API permissions are granted for Service Principal'
+        Write-Host '  3) Fix Requirement 3 - Check if API permissions are granted for Service Principal'
         #Write-Host '     This is not automated for security reasons. Grant permissions on Azure Portal manually, and understand least privileged access for OpenIDSync.'
     }
     if ($State.AllRequirementsMet) {
@@ -680,7 +866,10 @@ function Write-OpenIdSyncDashboard {
         Write-Host ''
     }
     Write-Host ' 11) View configuration details'
-    Write-Host ' 12) Exit'
+    if ($State.AllRequirementsMet) {
+        Write-Host ' 12) View requirement details (all passed)'
+    }
+    Write-Host ' 99) Exit'
     Write-Host ''
 }
 
@@ -781,6 +970,7 @@ function Invoke-Requirement2Bootstrap {
     Write-Host "Tip: run .\97_Set_OPENIDSYNC_CLIENT_SECRET.ps1 to set the secret interactively." -ForegroundColor Yellow
 
     $script:DashboardPermissionStatus = $null
+    $script:DashboardOnlineVerification = $null
     [void](Read-Host 'Press Enter to continue...')
 }
 
@@ -829,9 +1019,10 @@ function Invoke-OpenIdSyncDashboard {
     )
 
     $forcePermissionRefresh = $false
+    $forceOnlineRefresh = $false
 
     while ($true) {
-        $state = Get-OpenIdSyncDashboardState -ConfigPath $ConfigPath -OnlineConfigPath $OnlineConfigPath -PasswordFilePath $PasswordFilePath -ForcePermissionRefresh:$forcePermissionRefresh
+        $state = Get-OpenIdSyncDashboardState -ConfigPath $ConfigPath -OnlineConfigPath $OnlineConfigPath -PasswordFilePath $PasswordFilePath -ForcePermissionRefresh:$forcePermissionRefresh -ForceOnlineRefresh:$forceOnlineRefresh
         if ([string]::IsNullOrWhiteSpace($state.PreferredSource) -and $InitialSource) {
             $state.PreferredSource = $InitialSource
         }
@@ -844,12 +1035,13 @@ function Invoke-OpenIdSyncDashboard {
             if (-not $req.IsMet) { $available += [string]$req.Id }
         }
         if ($state.AllRequirementsMet) {
-            $available += '4','5','6','7','8','9','10'
+            $available += '4','5','6','7','8','9','10','12'
         }
-        $available += '11'
+        $available += '11','99'
 
         Write-OpenIdSyncDashboard -State $state -AvailableOptions $available
         $forcePermissionRefresh = $false
+        $forceOnlineRefresh = $false
         $choice = (Read-Host 'Select an option').Trim()
         if ([string]::IsNullOrWhiteSpace($choice)) { continue }
 
@@ -858,7 +1050,13 @@ function Invoke-OpenIdSyncDashboard {
                 if ($available -contains '1') { Invoke-Requirement1Remediation } else { Write-Host 'Requirement 1 already satisfied.' -ForegroundColor Green; [void](Read-Host 'Press Enter to continue...') }
             }
             '2' {
-                if ($available -contains '2') { Invoke-Requirement2Bootstrap -ConfigPath $ConfigPath -OnlineConfigPath $OnlineConfigPath -State $state } else { Write-Host 'Requirement 2 already satisfied.' -ForegroundColor Green; [void](Read-Host 'Press Enter to continue...') }
+                if ($available -contains '2') {
+                    Invoke-Requirement2Bootstrap -ConfigPath $ConfigPath -OnlineConfigPath $OnlineConfigPath -State $state
+                    $forceOnlineRefresh = $true
+                } else {
+                    Write-Host 'Requirement 2 already satisfied.' -ForegroundColor Green
+                    [void](Read-Host 'Press Enter to continue...')
+                }
             }
             '3' {
                 if ($available -contains '3') {
@@ -984,6 +1182,14 @@ function Invoke-OpenIdSyncDashboard {
                 Show-ConfigurationDetails -Details $state.ConfigurationDetails
             }
             '12' {
+                if ($available -contains '12') {
+                    Show-RequirementDetails -Requirements $state.Requirements
+                } else {
+                    Write-Host 'Requirement details are only available after all requirements pass.' -ForegroundColor Yellow
+                    [void](Read-Host 'Press Enter to continue...')
+                }
+            }
+            '99' {
                 return [pscustomobject]@{
                     StartSync       = $false
                     ExitRequested   = $true
