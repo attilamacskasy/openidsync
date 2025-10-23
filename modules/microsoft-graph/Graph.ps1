@@ -9,6 +9,21 @@ $script:GraphModules = @(
     'Microsoft.Graph.Groups'
 )
 
+function Get-GraphModuleRequirementStatus {
+    $required = $script:GraphModules
+    $installed = @()
+    $missing = @()
+    foreach ($m in $required) {
+        if (Get-Module -ListAvailable -Name $m) { $installed += $m } else { $missing += $m }
+    }
+    [pscustomobject]@{
+        Required     = $required
+        Installed    = $installed
+        Missing      = $missing
+        AllInstalled = ($missing.Count -eq 0)
+    }
+}
+
 # Increase function capacity for Windows PowerShell 5.1
 try {
     $targetFuncCap = 32768
@@ -42,12 +57,11 @@ function Install-GraphModules {
 
 function Import-GraphModules {
     $required = $script:GraphModules
-    $available = @()
-    foreach ($r in $required) { if (Get-Module -ListAvailable -Name $r) { $available += $r } }
-    if ($available.Count -lt $required.Count) {
+    $status = Get-GraphModuleRequirementStatus
+    if (-not $status.AllInstalled) {
         if ($script:AutoInstallGraphModules -or $script:NonInteractive) {
             $ok = Install-GraphModules
-            if (-not $ok) { throw "Missing Graph modules (see $script:GraphModules list)" }
+            if (-not $ok) { throw "Missing Graph modules (see $($required -join ', ') list)" }
         } else {
             Write-Host "Microsoft Graph PowerShell is required for Online mode. Required submodules:" -ForegroundColor Yellow
             $listText = (" - " + ($required -join "`n - "))
@@ -57,14 +71,14 @@ function Import-GraphModules {
             $ans = Read-Host "Install required submodules now? [Y]es/[N]o"
             if ($ans -match '^(?i:y|yes)$') {
                 $ok = Install-GraphModules
-                if (-not $ok) { throw "Missing Graph modules (see $script:GraphModules list)" }
-            } else {
-                throw "Missing Graph modules (see $script:GraphModules list)"
+                if (-not $ok) { throw "Missing Graph modules (see $($required -join ', ') list)" }
+            }
+            else {
+                throw "Missing Graph modules (see $($required -join ', ') list)"
             }
         }
     }
     foreach ($m in $required) { Import-Module $m -ErrorAction Stop }
-    #Write-Log -Level 'INFO' -Message ("Imported Graph submodules: {0}" -f ($required -join ', '))
 }
 
 function Test-GraphCommands {
@@ -80,6 +94,70 @@ function Test-GraphCommands {
         Write-Log -Level 'ERROR' -Message $msg
         throw $msg
     }
+}
+
+function Get-GraphAppPermissionStatus {
+    param(
+        [Parameter(Mandatory=$true)][string]$TenantId,
+        [Parameter(Mandatory=$true)][string]$ClientId,
+        [string]$ClientSecret
+    )
+
+    $result = [ordered]@{
+        Success = $false
+        Error   = $null
+        Permissions = @()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($TenantId) -or [string]::IsNullOrWhiteSpace($ClientId)) {
+        $result.Error = 'TenantId or ClientId missing.'
+        return [pscustomobject]$result
+    }
+
+    Import-GraphModules
+    $connected = $false
+    if (-not [string]::IsNullOrWhiteSpace($ClientSecret)) {
+        try { $connected = Connect-GraphAppOnly -TenantId $TenantId -ClientId $ClientId -ClientSecret $ClientSecret } catch { $connected = $false }
+    }
+    if (-not $connected) {
+        try { $connected = Connect-GraphDelegated -Scopes @('Application.Read.All','AppRoleAssignment.Read.All','Directory.Read.All') } catch { $connected = $false }
+    }
+    if (-not $connected) {
+        $result.Error = 'Unable to connect to Microsoft Graph to verify permissions.'
+        return [pscustomobject]$result
+    }
+
+    try {
+        $graphAppId = '00000003-0000-0000-c000-000000000000'
+        $targetSp = Get-MgServicePrincipal -Filter "appId eq '$ClientId'" -ErrorAction Stop | Select-Object -First 1
+        if (-not $targetSp) {
+            throw "Service principal not found for appId $ClientId"
+        }
+        $assignments = Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $targetSp.Id -All -ErrorAction Stop
+        $graphSp = Get-MgServicePrincipal -Filter "appId eq '$graphAppId'" -ErrorAction Stop | Select-Object -First 1
+        if (-not $graphSp) { throw 'Microsoft Graph service principal not found.' }
+        $roleMap = @{}
+        foreach ($role in $graphSp.AppRoles) {
+            if ($role.Value -in @('User.Read.All','Directory.Read.All')) {
+                $roleMap[$role.Value] = $role.Id
+            }
+        }
+        $permResults = @()
+        foreach ($perm in @('User.Read.All','Directory.Read.All')) {
+            $assigned = $false
+            if ($roleMap.ContainsKey($perm)) {
+                $assigned = $assignments | Where-Object { $_.AppRoleId -eq $roleMap[$perm] } | Select-Object -First 1
+                $assigned = [bool]$assigned
+            }
+            $permResults += [pscustomobject]@{ Name = $perm; Granted = $assigned }
+        }
+        $result.Success = $true
+        $result.Permissions = $permResults
+    }
+    catch {
+        $result.Error = $_.Exception.Message
+    }
+    return [pscustomobject]$result
 }
 
 function Get-TenantLicenseInfo {
@@ -321,12 +399,14 @@ function Show-Welcome {
         if (-not $hasAppIds) {
             $status += 'Status: No App Registration found in OnlineSyncConfig. This run will use delegated sign-in.'
             $status += 'Tip: Add -AutoInstallGraphModules and optionally -AutoCreateGraphApp to create the app now.'
-    } elseif ($hasAppIds -and -not $secretPresent) {
+        }
+        elseif ($hasAppIds -and -not $secretPresent) {
             $status += ("Status: App Registration detected, but client secret env var '{0}' is not set." -f $envName)
             $status += 'Action: Set the secret and open a NEW PowerShell window:'
             $status += ("        setx {0} `"YOUR_SECRET_HERE`"" -f $envName)
             $status += '        or run .\\97_Set_OPENIDSYNC_CLIENT_SECRET.ps1'
-        } else {
+        }
+        else {
             $status += 'Status: App Registration and client secret found - App-only (Service Principal) is ready.'
         }
         if ($script:OnlineSyncConfigPath) { $status += ("Online sync IDs file: {0}" -f $script:OnlineSyncConfigPath) }
@@ -344,7 +424,7 @@ function Get-EntraUsersViaGraph {
     )
     $connected = $false
     if ($TenantId -and $ClientId -and $ClientSecret) {
-    $connected = Connect-GraphAppOnly -TenantId $TenantId -ClientId $ClientId -ClientSecret $ClientSecret
+        $connected = Connect-GraphAppOnly -TenantId $TenantId -ClientId $ClientId -ClientSecret $ClientSecret
     }
     if (-not $connected) {
         $connected = Connect-GraphDelegated -Scopes @('User.Read.All','Directory.Read.All')

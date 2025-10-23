@@ -16,3 +16,6 @@ tmp/
 
 # Ignore logs in rclone-deploy
 rclone-deploy/log/
+
+# Ignore main log file
+log/openidsync.log

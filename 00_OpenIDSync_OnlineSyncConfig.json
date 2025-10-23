@@ -1,5 +1,6 @@
 {
   "OnlineSyncConfig": {
+    "AppRegistrationName": "",
     "TenantId": "",
     "ClientId": "",
     "SpObjectId": "",

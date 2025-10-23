@@ -46,6 +46,7 @@ try {
             (Join-Path (Join-Path $modulesRoot 'common') 'Contracts.ps1'),
             (Join-Path (Join-Path $modulesRoot 'common') 'Orchestrator.ps1'),
             (Join-Path (Join-Path $modulesRoot 'common') 'Summary.ps1'),
+            (Join-Path (Join-Path $modulesRoot 'common') 'Dashboard.ps1'),
             (Join-Path (Join-Path $modulesRoot 'ad') 'ActiveDirectory.ps1'),
             (Join-Path (Join-Path $modulesRoot 'transform') 'Users.ps1'),
             (Join-Path (Join-Path $modulesRoot 'sync-sources') 'CSV.ps1'),
@@ -253,26 +254,34 @@ if ([string]::IsNullOrWhiteSpace($DefaultOU)) {
     throw "Default OU is required."
 }
 
-# Choose source if not specified explicitly or via config
-if ([string]::IsNullOrWhiteSpace($Source)) {
-    if ($script:NonInteractive) {
-        $cfgPathMsg = if ($script:ConfigPath) { $script:ConfigPath } else { '00_OpenIDSync_Config.json' }
-        $msg = "-NonInteractive: Missing input source. Set UserSyncConfig.PreferredSource to 'Online' (recommended) or 'CSV' in $cfgPathMsg, or pass -Source Online/CSV on the command line."
-        throw $msg
-    } else {
-        Write-Host "Select input source:" -ForegroundColor Cyan
-        Write-Host "  1 - Online (Microsoft Graph / Entra ID)" -ForegroundColor Cyan
-        Write-Host "  2 - CSV (offline Microsoft 365 export)" -ForegroundColor Cyan
-        $ans = Read-Host "Enter 1 or 2 (default: 1)"
-        switch (($ans + '').Trim().ToUpper()) {
-            '' { $Source = 'Online' }
-            '1' { $Source = 'Online' }
-            '2' { $Source = 'CSV' }
-            'O' { $Source = 'Online' } # backward compatible
-            'C' { $Source = 'CSV' }    # backward compatible
-            default { $Source = 'Online' }
-        }
+# Interactive dashboard (UI overhaul) for managing prerequisites and modes
+if (-not $script:NonInteractive) {
+    $dashboardResult = Invoke-OpenIdSyncDashboard -ConfigPath $script:ConfigPath -OnlineConfigPath $script:OnlineSyncConfigPath -PasswordFilePath $script:CredLogPath -InitialSource $Source -InitialTarget $Target -DefaultOU $DefaultOU
+    if ($dashboardResult.ExitRequested -and -not $dashboardResult.StartSync) {
+        try { Write-Log -Level 'INFO' -Message 'User exited from OpenIDSync dashboard before synchronization.' } catch {}
+        return
     }
+    if ($dashboardResult.StartSync) {
+        if ($dashboardResult.Source) { $Source = $dashboardResult.Source }
+        if ($dashboardResult.Target) { $Target = $dashboardResult.Target }
+        if ($dashboardResult.UsersMode) { $script:ModeUsers = $dashboardResult.UsersMode }
+        if ($dashboardResult.GroupsMode) { $script:ModeGroups = $dashboardResult.GroupsMode }
+        if ($dashboardResult.MembershipsMode) { $script:ModeMemberships = $dashboardResult.MembershipsMode }
+    }
+    $script:ProcessAll = ($script:ModeUsers -eq 'All')
+    $script:GroupsProcessAll = ($script:ModeGroups -eq 'All')
+    $script:MembershipsProcessAll = ($script:ModeMemberships -eq 'All')
+}
+
+if (Test-Path -LiteralPath $ConfigPath) {
+    try { $cfg = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json } catch {}
+}
+
+# Choose source if not specified explicitly or via config
+if ([string]::IsNullOrWhiteSpace($Source) -and $script:NonInteractive) {
+    $cfgPathMsg = if ($script:ConfigPath) { $script:ConfigPath } else { '00_OpenIDSync_Config.json' }
+    $msg = "-NonInteractive: Missing input source. Set UserSyncConfig.PreferredSource to 'Online' (recommended) or 'CSV' in $cfgPathMsg, or pass -Source Online/CSV on the command line."
+    throw $msg
 }
 
 # Compute friendly labels for source & target
@@ -281,28 +290,7 @@ $targetFriendly = switch (($Target + '').ToUpper()) { 'WINDOWSAD' { 'Windows Act
 $script:SourceFriendly = $sourceFriendly
 $script:TargetFriendly = $targetFriendly
 
-# Interactive menu for modes (only when not NonInteractive)
-if (-not $script:NonInteractive) {
-    Write-Host ""; Write-Host ("Source: {0}" -f $sourceFriendly) -ForegroundColor Cyan
-    Write-Host ("Target: {0}" -f $targetFriendly) -ForegroundColor Cyan
-    Write-Host ""; Write-Host "1. Users Synchronization" -ForegroundColor Cyan
-    Write-Host "  1.1. [A]ll users (default)"; Write-Host "  1.2. [P]rompt for each user"; Write-Host "  1.3. [S]kip Users (no user sync)"; Write-Host "  1.4. [Q]uit (abort run)"
-    $ans1 = Read-Host "Choose Users mode [A/P/S/Q] (default: A)"
-    switch (($ans1 + '').Trim().ToUpper()) { 'P' { $script:ModeUsers='Prompt' } 'S' { $script:ModeUsers='Skip' } 'Q' { $script:QuitRequested=$true } default { $script:ModeUsers='All' } }
-    if ($script:QuitRequested) { Write-Log -Level 'INFO' -Message 'Quit selected at Users mode menu.'; return }
 
-    Write-Host ""; Write-Host "2. Groups Synchronization" -ForegroundColor Cyan
-    Write-Host "  2.1. [A]ll groups"; Write-Host "  2.2. [P]rompt for each group"; Write-Host "  2.3. [S]kip Groups (no group sync)"; Write-Host "  2.4. [Q]uit (abort run)"
-    $ans2 = Read-Host "Choose Groups mode [A/P/S/Q] (default: A)"
-    switch (($ans2 + '').Trim().ToUpper()) { 'P' { $script:ModeGroups='Prompt' } 'S' { $script:ModeGroups='Skip' } 'Q' { $script:QuitRequested=$true } default { $script:ModeGroups='All' } }
-    if ($script:QuitRequested) { Write-Log -Level 'INFO' -Message 'Quit selected at Groups mode menu.'; return }
-
-    Write-Host ""; Write-Host "3. Group Memberships Synchronization" -ForegroundColor Cyan
-    Write-Host "  3.1. [A]ll memberships"; Write-Host "  3.2. [P]rompt for each membership"; Write-Host "  3.3. [S]kip memberships (no memberships sync)"; Write-Host "  3.4. [Q]uit (abort run)"
-    $ans3 = Read-Host "Choose Memberships mode [A/P/S/Q] (default: A)"
-    switch (($ans3 + '').Trim().ToUpper()) { 'P' { $script:ModeMemberships='Prompt' } 'S' { $script:ModeMemberships='Skip' } 'Q' { $script:QuitRequested=$true } default { $script:ModeMemberships='All' } }
-    if ($script:QuitRequested) { Write-Log -Level 'INFO' -Message 'Quit selected at Memberships mode menu.'; return }
-}
 
 # Guard: NonInteractive cannot create app interactively
 if ($script:NonInteractive -and $AutoCreateGraphApp) {
@@ -376,11 +364,16 @@ if ($Source -eq 'Online') {
             Test-GraphCommands
             Show-SecuritySummary -CreatingApp
             # Create app registration (do not persist secret to disk)
-            $appInfo = New-OpenIdSyncGraphApp
+            $appDisplayName = 'OpenIDSync_org__Entra_Sync_Windows_AD'
+            try {
+                if ($cfg -and $cfg.OnlineSyncConfig -and $cfg.OnlineSyncConfig.AppRegistrationName) { $appDisplayName = [string]$cfg.OnlineSyncConfig.AppRegistrationName }
+                elseif ($osc -and $osc.AppRegistrationName) { $appDisplayName = [string]$osc.AppRegistrationName }
+            } catch {}
+            $appInfo = New-OpenIdSyncGraphApp -DisplayName $appDisplayName
             $TenantId = $appInfo.TenantId; $ClientId = $appInfo.ClientId; $ClientSecret = $appInfo.ClientSecret
             Write-Log -Level 'INFO' -Message 'New App Registration created successfully for Online mode.'
             # Save identifiers to config to avoid re-creating
-            Save-OnlineSyncConfig -OnlineConfigPath $script:OnlineSyncConfigPath -TenantId $TenantId -ClientId $ClientId -SpObjectId $appInfo.SpObjectId -ClientSecretEnvVar $ClientSecretEnvVar
+            Save-OnlineSyncConfig -OnlineConfigPath $script:OnlineSyncConfigPath -TenantId $TenantId -ClientId $ClientId -SpObjectId $appInfo.SpObjectId -ClientSecretEnvVar $ClientSecretEnvVar -AppRegistrationName $appDisplayName
             # Show secret ONCE and instruct to set environment variable
             Write-Host ""; Write-Host "==== IMPORTANT: CLIENT SECRET (copy and store securely) ==== " -ForegroundColor Yellow
             Write-Host ($appInfo.ClientSecret) -ForegroundColor Yellow

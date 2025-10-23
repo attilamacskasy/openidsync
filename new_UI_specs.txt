@@ -1,0 +1,111 @@
+# comments with hash are instructions for AI on how to build this UI.
+# AI may rewrite UI text to fix typos or unclear wording, but must keep the original design intent.
+=============================================
+=== Open Identity Synchronization Utility ===
+===            OpenIDSync.org              ===
+=============================================
+
+Creative spark and spec-driven development by: Attila Macskasy
+Code generated using: GPT-5 Codex (Preview) – Premium Model x1
+
+Source Directory: Azure Entra ID (Microsoft)
+Target Directory: Windows Active Directory (Microsoft)
+
+Base configuration loaded from file: [00_OpenIDSync_Config.json]  # white background, black text
+
+	DomainPromotionConfig:
+		DomainName:	macskasy.com
+		NetBIOSName:	MACSKASY
+
+	UserSyncConfig:
+		DefaultOU:	CN=Users,DC=macskasy,DC=com
+		SkipUserBasedOnDisplayName:
+			(Archive)
+			(Temp)
+		SkipUserBasedOnUserPrincipalName:
+			#EXT#
+			Temporary
+
+Online configuration loaded from file: [00_OpenIDSync_OnlineSyncConfig.json]  # white background, black text
+
+	App registration name: xxx
+	TenantId:
+	ClientId:
+	SpObjectId:
+	ClientSecretEnvVar: OPENIDSYNC_CLIENT_SECRET not set.  # show with RED background/white text if not set
+		OPENIDSYNC_CLIENT_SECRET set to XXX***XXX  # displaying the first and last 3 characters with *** in between
+
+Password credentials file: .\log\xxx  # white background, black text
+
+	When a new user is created in the destination directory, the password is not synchronized because the API does not provide the password hash.
+	As a workaround, OpenIDSync creates a new password for users and stores it in this file. Back up the file in a secure location and use the remove-password option in the menu.
+
+	Password credentials file not yet created.  # show with RED background/white text if the file is missing
+	# or
+	Number of users in file:	x
+	Last update timestamp:		x
+	Passwords removed:		NO
+
+
+Logging configuration file: .\openidsync.log  # white background, black text
+
+Requirements 1 – Installed PowerShell Graph API modules:  # show with RED background/white text if not met; clear the highlight when fulfilled
+	No modules installed yet.
+	# or
+	Installed modules:
+	# list modules using logic similar to 99_Get-Module.ps1
+
+Requirements 2 – Create app registration for credential-less use:  # show with RED background/white text if not met; clear the highlight when fulfilled
+	No app registration / service principal configured yet in Entra ID. Using delegated user mode (prompt the user to sign in to create an app registration for credential-less execution).
+	# or
+
+Requirements 3 – Required API permissions granted:  # show with RED background/white text if not met; clear the highlight when fulfilled
+	# these API permission names must be stored in 00_OpenIDSync_Config.json, not hard-coded
+	User.Read.All [NOT YET GRANTED] # show with RED background/white text if not met; clear the highlight when fulfilled
+	Directory.Read.All [NOT YET GRANTED] # show with RED background/white text if not met; clear the highlight when fulfilled
+	# or
+	User.Read.All [GRANTED]
+	Directory.Read.All [GRANTED]
+
+Menu:
+
+	1) Fix Requirement 1 – Install PowerShell Graph API modules [-AutoInstallGraphModules]
+	2) Fix Requirement 2 – Create app registration / service principal for credential-less use [-AutoCreateGraphApp]
+	3) Fix Requirement 3 – Verify API permissions for the service principal
+	   This step is not automated for security reasons. Grant permissions in the Azure portal manually and confirm the least-privileged credentials assigned to OpenIDSync support the synchronization job.
+	   # display user instructions for completing this step.
+
+	# Requirement-related menu items appear only while unmet. Without completing ALL requirements, the remaining menu options are hidden. Once resolved, each fulfilled requirement should be removed from the menu.
+
+	4) Set user sync mode [S]KIP | [A]LL | [P]ROMPT  # display the configured value; settings persist in 00_OpenIDSync_Config.json
+	5) Set group sync mode [S]KIP | [A]LL | [P]ROMPT
+	6) Set group membership sync mode [S]KIP | [A]LL | [P]ROMPT
+
+	7) Change source directory
+		[M] Azure Entra ID (Microsoft)
+		[A] AWS IAM Identity Center (Amazon)
+		[G] GCP Cloud Identity (Google)
+		[O] OCI IAM (Oracle)
+		[W] Windows Active Directory (Microsoft)
+		[K] Keycloak (Open Source)
+		[C] CSV File (Microsoft 365 Admin Portal Export)
+	Currently only "Azure Entra ID (Microsoft)" is supported.
+
+	8) Change target directory
+		[M] Azure Entra ID (Microsoft)
+		[A] AWS IAM Identity Center (Amazon)
+		[G] GCP Cloud Identity (Google)
+		[O] OCI IAM (Oracle)
+		[W] Windows Active Directory (Microsoft)
+		[K] Keycloak (Open Source)
+		[C] CSV File (Microsoft 365 Admin Portal Export)
+	Currently only "[W] Windows Active Directory (Microsoft)" is supported.
+
+	9) Start Synchronization
+
+	10) Remove passwords from the password credentials file (after backing up initial/temporary passwords securely)
+	    This file can be used to feed OpenGWTools and create a point-to-site road warrior VPN for users listed in it.
+
+	11) Exit
+
+Select an option: 1
