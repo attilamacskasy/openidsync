@@ -48,24 +48,38 @@ Password credentials file: .\log\xxx  # white background, black text
 
 
 Logging configuration file: .\openidsync.log  # white background, black text
+# Requirement blocks render only when at least one requirement is not yet satisfied. Completed dashboards suppress the entire requirement section.
 
-Requirements 1 – Installed PowerShell Graph API modules:  # show with RED background/white text if not met; clear the highlight when fulfilled
+Requirement 1 – Installed PowerShell Graph API modules:  # show with RED background/white text if not met; clear the highlight when fulfilled
 	No modules installed yet.
 	# or
 	Installed modules:
-	# list modules using logic similar to 99_Get-Module.ps1
+	- Microsoft.Graph.Authentication
+	- Microsoft.Graph.Users
+	- Microsoft.Graph.Applications
+	- Microsoft.Graph.Identity.DirectoryManagement
+	- Microsoft.Graph.Groups
 
-Requirements 2 – Create app registration for credential-less use:  # show with RED background/white text if not met; clear the highlight when fulfilled
+Requirement 2 – Create app registration for credential-less use:  # show with RED background/white text if not met; clear the highlight when fulfilled
+	App registration name: <value>
+	TenantId: <value or None>
+	ClientId: <value or None>
+	SpObjectId: <value or None>
+	OPENIDSYNC_CLIENT_SECRET set to XXX***XXX  # red background if the secret environment variable is missing
 	No app registration / service principal configured yet in Entra ID. Using delegated user mode (prompt the user to sign in to create an app registration for credential-less execution).
-	# or
+	# When verification succeeds, display:
+	Verified application: <display name>
+	Verified service principal: <display name>
+	# Otherwise include warning/error text from the Graph lookup.
 
-Requirements 3 – Required API permissions granted:  # show with RED background/white text if not met; clear the highlight when fulfilled
-	# these API permission names must be stored in 00_OpenIDSync_Config.json, not hard-coded
-	User.Read.All [NOT YET GRANTED] # show with RED background/white text if not met; clear the highlight when fulfilled
-	Directory.Read.All [NOT YET GRANTED] # show with RED background/white text if not met; clear the highlight when fulfilled
-	# or
-	User.Read.All [GRANTED]
-	Directory.Read.All [GRANTED]
+Requirement 3 – Required API permissions granted:  # show with RED background/white text if not met; clear the highlight when fulfilled
+	User directory read: Retrieved at least one user from Microsoft Graph.
+	Group directory read: Retrieved at least one group from Microsoft Graph.
+	Group membership read: Retrieved at least one member from Microsoft Graph.
+	# On failure, surface the descriptive error returned by Test-GraphReadOperations (e.g. Authorization_RequestDenied …).
+	# When no eligible group is available the membership test reports “Skipped (no group available to test memberships).”
+
+Requirement details are cached after a successful check and persisted to 00_OpenIDSync_OnlineSyncConfig.json.PermissionVerification. Re-running the dashboard reads from cache unless the user forces a refresh.
 
 Menu:
 
@@ -75,7 +89,7 @@ Menu:
 	   This step is not automated for security reasons. Grant permissions in the Azure portal manually and confirm the least-privileged credentials assigned to OpenIDSync support the synchronization job.
 	   # display user instructions for completing this step.
 
-	# Requirement-related menu items appear only while unmet. Without completing ALL requirements, the remaining menu options are hidden. Once resolved, each fulfilled requirement should be removed from the menu.
+	# Requirement-related menu items appear only while the associated requirement is unmet. Once all requirements pass, the requirement block is hidden and options 1–3 no longer display.
 
 	4) Set user sync mode [S]KIP | [A]LL | [P]ROMPT  # display the configured value; settings persist in 00_OpenIDSync_Config.json
 	5) Set group sync mode [S]KIP | [A]LL | [P]ROMPT
@@ -106,6 +120,8 @@ Menu:
 	10) Remove passwords from the password credentials file (after backing up initial/temporary passwords securely)
 	    This file can be used to feed OpenGWTools and create a point-to-site road warrior VPN for users listed in it.
 
-	11) Exit
+	11) View configuration details
+	12) View requirement details (all passed)  # visible only after every requirement succeeds
+	99) Exit
 
 Select an option: 1

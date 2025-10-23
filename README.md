@@ -14,9 +14,12 @@ Purpose: Spin up a new on‑premises Active Directory forest and interactively s
 - New: Online (Graph API) mode to pull users directly from Entra ID; optional first‑time App Registration creation; CSV mode remains available.
 - New safety tool: `04_DANGER_Remove_OpenIDSync_Managed_Users.ps1` deletes only users previously created/managed by this tool (those with `[openidsync.org]` in `description`). Includes red‑banner warnings, double confirmation, `-WhatIf`, `-Force`, and automatic backup CSV.
 
-- Source selection & unattended mode:
-	- New numeric source selector: `1 - Online` (default) or `2 - CSV`.
-	- New `-NonInteractive` switch for scheduled runs; combines well with `-AllUsers` to process every user without prompts.
+- Dashboard-first setup:
+	- Launching the sync script now opens an interactive dashboard that highlights any outstanding requirements before a run can start.
+	- Requirement banners disappear automatically once satisfied, and option `12) View requirement details` remains available for a full audit trail.
+	- Sync mode, source, and target controls unlock only after all requirements pass, keeping new operators on the happy path.
+- Unattended mode:
+	- `-NonInteractive` switch for scheduled runs; combines well with `-AllUsers` to process every user without prompts.
 	- `-NonInteractive` requires a defined source: either pass `-Source Online|CSV` or set `UserSyncConfig.PreferredSource` in `00_OpenIDSync_Config.json`. If missing, the script stops with guidance.
 	- `PreferredSource` moved into the main config under `UserSyncConfig` (removed from the online config file).
 
@@ -74,44 +77,79 @@ Purpose: Spin up a new on‑premises Active Directory forest and interactively s
 - Enhanced exception policies (e.g., Exchange Admin → specific AD group, Teams Admin → delegated group).
 - Canonical object orchestration (wiring `Contracts.ps1` + `Orchestrator.ps1` end-to-end for any-source → any-target transforms).
 
+## Interactive dashboard workflow
+Running `./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1` interactively now launches a full-screen dashboard that summarizes your configuration, highlights any missing prerequisites, and lets you start synchronization only when everything is ready.
+
+- Requirement cards show in red while unmet and disappear automatically once satisfied. After that, option `12) View requirement details (all passed)` gives you a read-only audit view on demand.
+- Configuration, password-log, and logging summaries appear at the top of the screen so you always know which files the run will touch.
+- Sync mode, source, target, and password-redaction tools unlock immediately after all requirements pass; until then you only see the remediation actions you need.
+
+```
+Menu:
+
+	1) Fix Requirement 1 - Install PowerShell Graph API Modules [-AutoInstallGraphModules]
+	2) Fix Requirement 2 - Create App Registration / Service Principal for credential-less use [-AutoCreateGraphApp]
+	3) Fix Requirement 3 - Check if API permissions are granted for Service Principal
+	4) Set user sync mode [S]KIP | [A]LL | [P]ROMPT (current: ALL)
+	5) Set group sync mode [S]KIP | [A]LL | [P]ROMPT (current: ALL)
+	6) Set group membership sync mode [S]KIP | [A]LL | [P]ROMPT (current: ALL)
+	7) Change Source Directory
+	8) Change Target Directory
+	9) Start Synchronization
+ 10) Remove passwords from Password credentials file (after you backed up initial/temporary passwords in secure location)
+ 11) View configuration details
+ 12) View requirement details (all passed)
+ 99) Exit
+```
+
+Only options 1–3 and 11 appear when you first launch the dashboard. As soon as the requirements are green, the rest of the menu is revealed automatically.
+
+## Meeting the requirements is easy
+Each prerequisite has a dedicated action and clear on-screen guidance:
+
+- **Requirement 1 — Install Microsoft Graph modules**: Option 1 calls the bundled installer, pulls the exact submodules (`Microsoft.Graph.Authentication`, `Microsoft.Graph.Users`, `Microsoft.Graph.Applications`, `Microsoft.Graph.Identity.DirectoryManagement`, `Microsoft.Graph.Groups`), and refreshes the requirement card in-place. No manual module hunting required.
+- **Requirement 2 — Create the app registration**: Option 2 signs you in once, creates the app + service principal, saves the identifiers to `00_OpenIDSync_OnlineSyncConfig.json`, and prints the generated client secret with masking guidance. The dashboard reminds you to store the secret by running `setx OPENIDSYNC_CLIENT_SECRET "<SECRET>"` and never writes the value to disk.
+- **Requirement 3 — Verify API permissions**: Option 3 runs `Test-GraphReadOperations`, reads real directory data through Microsoft Graph, and surfaces any missing consent with friendly messages. Successful results are cached in `00_OpenIDSync_OnlineSyncConfig.json.PermissionVerification`, so subsequent dashboard launches open instantly while still letting you force a refresh if desired.
+
+The net effect: new operators typically complete all three steps in a couple of minutes, and repeat runs skip straight to the sync options because the requirements stay satisfied and hidden.
+
 ---
 
-## Quick reference (how to use it in a nutshell)
+## How to use OpenIDSync (brief)
 Run these in an elevated Windows PowerShell (5.1) prompt from the repo folder.
 
-1) Prepare (installs prerequisites)
+1) **Prepare the host** (installs Windows/PowerShell prerequisites)
 ```powershell
 Set-Location "c:\Users\Attila\Desktop\Code\openidsync"
 ./01_OpenIDSync_Prepare_Domain_Promotion.ps1
 ```
 
-2) Promote to first domain controller (DSC)
+2) **Promote to the first domain controller** (Desired State Configuration)
 ```powershell
 ./02_OpenIDSync_Domain_Promotion.ps1
 ```
 
-3) First sync run (Online): create the App Registration & Service Principal automatically
+3) **Launch the dashboard and satisfy requirements**
 ```powershell
-./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -Source Online -AutoInstallGraphModules -AutoCreateGraphApp -DefaultOU "CN=Users,DC=contoso,DC=local"
+./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -DefaultOU "CN=Users,DC=contoso,DC=local"
 ```
-- The script prints a client secret once. Copy it and set it as an environment variable for your user:
+- Choose option **1** if Graph modules are missing; the installer runs automatically.
+- Choose option **2** to create the App Registration and Service Principal. The dashboard prints the client secret once—store it with:
 ```powershell
 setx OPENIDSYNC_CLIENT_SECRET "<YOUR-SECRET-HERE>"
 ```
+- Choose option **3** to verify Graph permissions. Once all requirements pass, the dashboard expands to show sync options.
+- Option **11** always shows configuration details; option **12** appears after the requirements are green so you can review the success history.
 
-4) In the Azure portal: grant admin consent for Microsoft Graph `User.Read.All` and `Directory.Read.All` (Application)
-- Navigate: App registrations → your app (e.g., `OpenIDSync_org__Entra_Sync_Windows_AD`) → `API permissions`.
-- Click `Grant admin consent for <your tenant>` (see screenshot in this repo).
-- Requires a privileged admin (Global Administrator or Privileged Role Administrator).
+4) **Start the synchronization**
+- Press **9** from the dashboard to launch the user/group synchronization workflow.
+- Use options **4–6** ahead of time if you want to switch between `All`, `Prompt`, or `Skip` processing modes for users, groups, or memberships.
 
-5) Second sync run (Online): now uses App-only (Service Principal)
-```powershell
-# Open a NEW PowerShell window so the environment variable is available
-./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -Source Online -AutoInstallGraphModules -DefaultOU "CN=Users,DC=contoso,DC=local"
-```
-You will see an "Authentication Context Used" block showing App-only with App Name, Client Id, and SP Object Id.
+5) **Optional maintenance**
+- Option **10** redacts generated passwords from the credentials CSV after you store them elsewhere.
+- Option **99** exits the dashboard; requirements stay cached so the next run jumps straight to the expanded menu.
 
-CSV mode is still available any time:
+CSV mode is still available any time—change the source via option **7** or pass `-Source CSV` on the command line for non-interactive runs:
 ```powershell
 ./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -Source CSV -CsvPath ".\users.csv" -DefaultOU "CN=Users,DC=contoso,DC=local"
 ```
@@ -121,7 +159,7 @@ If you need to clear cached tokens before switching auth contexts, run:
 ./98_Reset_Azure_Login_Session.ps1
 ```
 
-6) Unattended/scheduled runs (non‑interactive)
+### Unattended/scheduled runs (non-interactive)
 ```powershell
 # Online (App-only) — ensure the client secret env var exists for the scheduled account
 ./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -NonInteractive -AllUsers -Source Online -DefaultOU "CN=Users,DC=contoso,DC=local"
@@ -131,8 +169,8 @@ If you need to clear cached tokens before switching auth contexts, run:
 ```
 Notes for non‑interactive:
 - If `-Source` isn’t passed and `UserSyncConfig.PreferredSource` isn’t set, the script will stop with guidance to set it (recommended: `Online`).
-- `-AutoCreateGraphApp` requires an interactive sign‑in and cannot be combined with `-NonInteractive`.
-- When missing Graph modules, `-NonInteractive` will auto‑install the required Microsoft Graph submodules for the current user.
+- Bootstrap the app registration and Graph permissions interactively first (use dashboard options 1–3), then schedule non-interactive runs.
+
 
 ## First-time use (safe, least-privilege) — detailed steps
 
@@ -141,16 +179,17 @@ This tool is designed to be safe and transparent:
 - Optional Directory Readers: You may assign the built‑in `Directory Readers` directory role to the app’s service principal (no write permissions; optional for audit posture).
 - Clear credential visibility: Every run prints an "Authentication Context Used" block so you always see whether the script uses your user (Delegated) or the app (App-only), along with IDs.
 
-Step 1 — Create the App & SP
+Step 1 — Launch the dashboard and create the App & SP
 1. Run:
 ```powershell
-./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -Source Online -AutoInstallGraphModules -AutoCreateGraphApp -DefaultOU "CN=Users,DC=contoso,DC=local"
+./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -DefaultOU "CN=Users,DC=contoso,DC=local"
 ```
-2. Sign in interactively when prompted (delegated) so the script can create the App Registration, Service Principal, and a client secret.
-3. Copy the client secret printed by the script and set it as an environment variable for your user:
+2. In the dashboard, choose option **1** if the Microsoft Graph modules are missing, then choose option **2**. Sign in interactively when prompted so the script can create the App Registration, Service Principal, and a client secret.
+3. The dashboard prints the client secret once. Copy it immediately and set it as an environment variable for your user:
 ```powershell
 setx OPENIDSYNC_CLIENT_SECRET "<YOUR-SECRET-HERE>"
 ```
+4. (Optional) Run option **3** to verify permissions. Until admin consent is granted, you will see an authorization warning that explains what is missing.
 
 Step 2 — Grant admin consent in the Azure portal
 1. Open App registrations → your app → API permissions.
@@ -161,9 +200,9 @@ Step 3 — Use App-only on the next run
 1. Open a NEW Windows PowerShell window (to load the environment variable).
 2. Run:
 ```powershell
-./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -Source Online -AutoInstallGraphModules -DefaultOU "CN=Users,DC=contoso,DC=local"
+./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -DefaultOU "CN=Users,DC=contoso,DC=local"
 ```
-3. Confirm the "Authentication Context Used" shows App-only with your app’s identifiers.
+3. The dashboard will reopen with the requirement cards hidden. Select option **3** to confirm permissions succeed, then press **9** to start the sync. The run summary prints an "Authentication Context Used" block showing App-only with your app’s identifiers.
 
 ## Why this is safe (least privilege by design)
 
@@ -276,10 +315,10 @@ And the separate online sync config file `00_OpenIDSync_OnlineSyncConfig.json`:
 
 3) Sync users (`03_...`)
 - Reads users from either:
-  - Online: Microsoft Graph (Entra ID) — App‑only or delegated connection
+  - Online: Microsoft Graph (Entra ID) — App-only or delegated connection
   - CSV: Microsoft 365 Admin “Active users” export
-	- Interactive runs: you’ll see a numeric menu `1 - Online` / `2 - CSV` if `-Source` isn’t passed and no default is set.
-	- Non‑interactive runs: require `-Source` or `UserSyncConfig.PreferredSource`.
+	- Interactive runs: the dashboard (options **7** and **8**) controls the source/target before you press **9** to start synchronization.
+	- Non-interactive runs: require `-Source` or `UserSyncConfig.PreferredSource`.
 - Interactive per‑user preview with `[Y]es/[N]o/[A]ll/[Q]uit` prompt
 - Idempotent updates by email (AD `mail` or `proxyAddresses`); creates users when missing
 - Skip logic before any prompts:
