@@ -105,7 +105,7 @@ function Save-OpenIdSyncConfig {
         $ordered = ConvertTo-OrderedObject -Object $ConfigObject -PreferredOrder @('DomainPromotionConfig','PrepareConfig','UserSyncConfig','LoggingConfig')
         if ($ordered.Contains('UserSyncConfig') -and $ordered.UserSyncConfig) {
             $ordered.UserSyncConfig = ConvertTo-OrderedObject -Object ([pscustomobject]$ordered.UserSyncConfig) -PreferredOrder @(
-                'CsvPath','DefaultOU','PreferredSource','SuggestRemovals','SkipUserBasedOnDisplayName','SkipUserBasedOnUserPrincipalName','UsersMode','GroupsMode','MembershipsMode','SyncModes'
+                'CsvPath','DefaultOU','PreferredSource','SuggestRemovals','SkipUserBasedOnDisplayName','SkipUserBasedOnUserPrincipalName','GroupSecurityExceptions','UsersMode','GroupsMode','MembershipsMode','SyncModes'
             )
         }
         if ($ordered.Contains('LoggingConfig') -and $ordered.LoggingConfig) {

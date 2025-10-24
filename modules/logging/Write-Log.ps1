@@ -1,7 +1,7 @@
 function Write-Log {
     param(
         [string]$Message,
-        [ValidateSet('INFO','WARN','ERROR','PROMPT','ACTION','RESULT')]
+        [ValidateSet('INFO','WARN','ERROR','PROMPT','ACTION','RESULT','DEBUG')]
         [string]$Level = 'INFO'
     )
     try {

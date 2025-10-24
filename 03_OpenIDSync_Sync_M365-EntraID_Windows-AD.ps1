@@ -146,6 +146,14 @@ try {
 
 # Note: ActiveDirectory module import is deferred until just before syncing to Windows AD
 
+# Initialize security group exception set from config (populated later)
+$script:GroupSecurityExceptionSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+
+$continueLoop = $true
+$showDashboardNext = -not $script:NonInteractive
+
+while ($continueLoop) {
+
 # Resolve inputs (optionally from JSON)
 if (Test-Path -LiteralPath $ConfigPath) {
     try {
@@ -172,6 +180,19 @@ if (Test-Path -LiteralPath $ConfigPath) {
                 $exists = $false
                 foreach ($t in $script:SkipUpnTokens) { if (([string]$t).ToLower() -eq $b) { $exists = $true; break } }
                 if (-not $exists) { $script:SkipUpnTokens += $b }
+            }
+
+            if ($script:GroupSecurityExceptionSet) { $script:GroupSecurityExceptionSet.Clear() }
+            $exceptionList = @()
+            if ($usc.PSObject.Properties['GroupSecurityExceptions']) {
+                $exceptionList = @($usc.GroupSecurityExceptions)
+            }
+            if ($exceptionList.Count -gt 0) {
+                foreach ($exceptionName in $exceptionList) {
+                    if (-not [string]::IsNullOrWhiteSpace($exceptionName)) {
+                        [void]$script:GroupSecurityExceptionSet.Add(([string]$exceptionName).Trim())
+                    }
+                }
             }
 
             # Online sync config: prefer separate file, fallback to legacy section for backward compatibility
@@ -255,7 +276,8 @@ if ([string]::IsNullOrWhiteSpace($DefaultOU)) {
 }
 
 # Interactive dashboard (UI overhaul) for managing prerequisites and modes
-if (-not $script:NonInteractive) {
+$dashboardResult = $null
+if (-not $script:NonInteractive -and $showDashboardNext) {
     $dashboardResult = Invoke-OpenIdSyncDashboard -ConfigPath $script:ConfigPath -OnlineConfigPath $script:OnlineSyncConfigPath -PasswordFilePath $script:CredLogPath -InitialSource $Source -InitialTarget $Target -DefaultOU $DefaultOU
     if ($dashboardResult.ExitRequested -and -not $dashboardResult.StartSync) {
         try { Write-Log -Level 'INFO' -Message 'User exited from OpenIDSync dashboard before synchronization.' } catch {}
@@ -268,6 +290,9 @@ if (-not $script:NonInteractive) {
         if ($dashboardResult.GroupsMode) { $script:ModeGroups = $dashboardResult.GroupsMode }
         if ($dashboardResult.MembershipsMode) { $script:ModeMemberships = $dashboardResult.MembershipsMode }
     }
+    $showDashboardNext = $false
+}
+if (-not $script:NonInteractive) {
     $script:ProcessAll = ($script:ModeUsers -eq 'All')
     $script:GroupsProcessAll = ($script:ModeGroups -eq 'All')
     $script:MembershipsProcessAll = ($script:ModeMemberships -eq 'All')
@@ -497,8 +522,15 @@ try {
                 $uscLines += ('{0,-26}: {1}' -f 'DefaultOU', [string]$usc.DefaultOU)
                 $uscLines += ('{0,-26}: {1}' -f 'PreferredSource', [string]$usc.PreferredSource)
                 $uscLines += ('{0,-26}: {1}' -f 'SuggestRemovals', [string]$usc.SuggestRemovals)
-                $uscLines += ('{0,-26}: {1}' -f 'SkipDisplayNameTokens', ([string]::Join(', ', [string[]]$usc.SkipUserBasedOnDisplayName)))
-                $uscLines += ('{0,-26}: {1}' -f 'SkipUpnTokens', ([string]::Join(', ', [string[]]$usc.SkipUserBasedOnUserPrincipalName)))
+                $displaySkips = @($usc.SkipUserBasedOnDisplayName) | ForEach-Object { [string]$_ }
+                $upnSkips = @($usc.SkipUserBasedOnUserPrincipalName) | ForEach-Object { [string]$_ }
+                $securityExceptions = @()
+                if ($usc.PSObject.Properties['GroupSecurityExceptions']) {
+                    $securityExceptions = @($usc.GroupSecurityExceptions) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { [string]$_ }
+                }
+                $uscLines += ('{0,-26}: {1}' -f 'SkipDisplayNameTokens', ([string]::Join(', ', $displaySkips)))
+                $uscLines += ('{0,-26}: {1}' -f 'SkipUpnTokens', ([string]::Join(', ', $upnSkips)))
+                $uscLines += ('{0,-26}: {1}' -f 'GroupSecurityExceptions', ([string]::Join(', ', $securityExceptions)))
                 foreach ($l in $uscLines) { Write-Log -Level 'INFO' -Message ("UserSyncConfig | {0}" -f $l) }
             }
             if ($cfgPreview.LoggingConfig) {
@@ -612,6 +644,8 @@ if ($Source -eq 'Online' -and -not $script:QuitRequested -and $script:ModeGroups
         $groups = Get-EntraGroupsViaGraph
         Write-Log -Level 'INFO' -Message ("Groups to reconcile: {0}" -f $groups.Count)
         $groupMap = @{}
+        $securityDuplicateMap = @{}
+        $securityExceptionSet = $script:GroupSecurityExceptionSet
         foreach ($g in $groups) {
             $proceedGroup = $true
             if ($script:ModeGroups -eq 'Prompt' -and -not $script:GroupsProcessAll) {
@@ -625,14 +659,32 @@ if ($Source -eq 'Online' -and -not $script:QuitRequested -and $script:ModeGroups
             if ($res -and $res.Group) {
                 $groupMap[$g.Id] = $res.Group
                 if ($res.Created) { $script:Summary['GroupsCreated']++ } else { $script:Summary['GroupsExisting']++ }
+                $shouldDuplicate = $false
+                if ($securityExceptionSet -and $securityExceptionSet.Count -gt 0) {
+                    $shouldDuplicate = $securityExceptionSet.Contains(([string]$g.DisplayName).Trim())
+                }
+                if ($shouldDuplicate -and $g.Kind -ne 'Security') {
+                    Write-Log -Level 'DEBUG' -Message ("Group '{0}' matched security duplication exception (Kind={1})." -f $g.DisplayName, $g.Kind)
+                    $secRes = New-ADGroupIfMissing -DisplayName $g.DisplayName -Kind 'Security' -TargetOU $DefaultOU
+                    if ($secRes -and $secRes.Group) {
+                        $securityDuplicateMap[$g.Id] = $secRes.Group
+                        if ($secRes.Created) { $script:Summary['GroupsCreated']++ } else { $script:Summary['GroupsExisting']++ }
+                        Write-Log -Level 'DEBUG' -Message ("Security clone available for '{0}' -> {1}" -f $g.DisplayName, $secRes.Group.SamAccountName)
+                    } else {
+                        Write-Log -Level 'WARN' -Message ("Failed to ensure security clone for exception group '{0}'." -f $g.DisplayName)
+                    }
+                } elseif ($shouldDuplicate -and $g.Kind -eq 'Security') {
+                    Write-Log -Level 'DEBUG' -Message ("Group '{0}' already Security; skipping clone despite exception." -f $g.DisplayName)
+                }
             }
         }
         if ($script:ModeMemberships -ne 'Skip' -and -not $script:QuitRequested) {
             Write-Log -Level 'ACTION' -Message 'Reconciling group memberships...'
             foreach ($g in $groups) {
-            if (-not $groupMap.ContainsKey($g.Id)) { continue }
-            $targetG = $groupMap[$g.Id]
-            $memberUpns = Get-EntraGroupMembersViaGraph -GroupId $g.Id
+                if (-not $groupMap.ContainsKey($g.Id)) { continue }
+                $targetG = $groupMap[$g.Id]
+                $securityClone = $null
+                if ($securityDuplicateMap.ContainsKey($g.Id)) { $securityClone = $securityDuplicateMap[$g.Id] }
                 if ($script:ModeMemberships -eq 'Prompt' -and -not $script:MembershipsProcessAll) {
                     # Dry compute current vs desired to present counts
                     # We reuse Set-AdGroupMemberships logic by precomputing differences here would duplicate code; prompt with counts from API calls
@@ -649,6 +701,15 @@ if ($Source -eq 'Online' -and -not $script:QuitRequested -and $script:ModeGroups
                     Write-Log -Level 'INFO' -Message ("Memberships set for {0}: +{1}/-{2}" -f $targetG.SamAccountName, $mres.Added, $mres.Removed)
                     $script:Summary['GroupMembersAdded'] += [int]$mres.Added
                     $script:Summary['GroupMembersRemoved'] += [int]$mres.Removed
+                }
+                if ($securityClone) {
+                    Write-Log -Level 'DEBUG' -Message ("Applying membership parity to security clone {0} for source group '{1}'." -f $securityClone.SamAccountName, $g.DisplayName)
+                    $secRes = Set-AdGroupMemberships -Group $securityClone -MemberUpns $memberUpns
+                    if ($secRes) {
+                        Write-Log -Level 'INFO' -Message ("Memberships set for {0} (security clone of {1}): +{2}/-{3}" -f $securityClone.SamAccountName, $targetG.SamAccountName, $secRes.Added, $secRes.Removed)
+                        $script:Summary['GroupMembersAdded'] += [int]$secRes.Added
+                        $script:Summary['GroupMembersRemoved'] += [int]$secRes.Removed
+                    }
                 }
             }
         }
@@ -693,4 +754,53 @@ catch {
 }
 
 Write-Log -Level 'INFO' -Message "Finished."
+
+    if ($script:NonInteractive) {
+        $continueLoop = $false
+        break
+    }
+
+    $postAction = $null
+    while (-not $postAction) {
+        $choice = (Read-Host "Next steps? 1) Rerun Sync  2) Back to main menu  3) Quit").Trim()
+        Write-Log -Level 'PROMPT' -Message ("Next steps menu -> [{0}]" -f $choice)
+        switch ($choice) {
+            '1' { $postAction = 'Rerun' }
+            '2' { $postAction = 'Dashboard' }
+            '3' { $postAction = 'Quit' }
+            default {
+                Write-Host 'Please choose 1, 2, or 3.' -ForegroundColor Yellow
+            }
+        }
+    }
+
+    $rerunRequested = $false
+    $dashboardRequested = $false
+    switch ($postAction) {
+        'Rerun' {
+            $rerunRequested = $true
+            Write-Log -Level 'INFO' -Message 'Post-sync menu: rerun selected.'
+        }
+        'Dashboard' {
+            $dashboardRequested = $true
+            Write-Log -Level 'INFO' -Message 'Post-sync menu: return to dashboard selected.'
+        }
+        'Quit' {
+            $continueLoop = $false
+            Write-Log -Level 'INFO' -Message 'Post-sync menu: quit selected.'
+        }
+    }
+
+    if (-not $continueLoop) { break }
+
+    if ($rerunRequested) {
+        $showDashboardNext = $false
+        continue
+    }
+
+    if ($dashboardRequested) {
+        $showDashboardNext = $true
+        continue
+    }
+}
 

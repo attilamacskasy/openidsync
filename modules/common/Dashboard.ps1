@@ -716,8 +716,14 @@ function Write-OpenIdSyncDashboard {
                 $filteredUpnSkips = @($usc.SkipUserBasedOnUserPrincipalName | Where-Object { $_ -and ([string]$_).Trim().Length -gt 0 })
                 if ($filteredUpnSkips.Count -gt 0) { $upnSkips = $filteredUpnSkips -join ', ' }
             }
+            $securityExceptions = '(none)'
+            if ($usc.PSObject.Properties['GroupSecurityExceptions']) {
+                $filteredSecurity = @($usc.GroupSecurityExceptions | Where-Object { $_ -and ([string]$_).Trim().Length -gt 0 } | ForEach-Object { ([string]$_).Trim() })
+                if ($filteredSecurity.Count -gt 0) { $securityExceptions = $filteredSecurity -join ', ' }
+            }
             $baseDetailLines += (New-DisplayLine -Text ("`t`tSkipUserBasedOnDisplayName:`t{0}" -f $displayNameSkips))
             $baseDetailLines += (New-DisplayLine -Text ("`t`tSkipUserBasedOnUserPrincipalName:`t{0}" -f $upnSkips))
+            $baseDetailLines += (New-DisplayLine -Text ("`t`tGroupSecurityExceptions:`t{0}" -f $securityExceptions))
         } else {
             $baseDetailLines += (New-DisplayLine -Text "`t(UserSyncConfig section not found.)" -ForegroundColor 'Yellow')
         }

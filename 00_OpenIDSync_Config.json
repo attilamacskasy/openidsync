@@ -27,6 +27,9 @@
         "SkipUserBasedOnUserPrincipalName": [
             "#EXT#",
             "Temporary"
+        ],
+        "GroupSecurityExceptions": [
+            "TestM365"
         ]
     },
     "LoggingConfig": {

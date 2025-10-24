@@ -35,6 +35,7 @@ Purpose: Spin up a new on‑premises Active Directory forest and interactively s
 - Group Synchronization (Entra → AD):
 	- Creates corresponding AD groups for Entra Security, M365 (Unified), and Distribution groups.
 	- Prefix policy: `Sec_` for Security, `Team_` for M365 (Unified), `Distribution_` for Distribution lists; `Other` groups keep original root.
+	- Optional security clones: if a non-security source group’s display name appears in `UserSyncConfig.GroupSecurityExceptions`, the sync creates a `Sec_` prefixed security group alongside the original and keeps memberships in lockstep.
 	- Name normalization pipeline: removes Hungarian / accented diacritics, replaces spaces & dots with underscores, strips non `[A-Za-z0-9_]`, collapses repeated `_`, trims to 20 chars (AD `sAMAccountName` limit), removes trailing underscores.
 	- Safely skips creation if normalized `sAMAccountName` already exists.
 - Group Membership Parity:
@@ -204,6 +205,16 @@ Step 3 — Use App-only on the next run
 ```
 3. The dashboard will reopen with the requirement cards hidden. Select option **3** to confirm permissions succeed, then press **9** to start the sync. The run summary prints an "Authentication Context Used" block showing App-only with your app’s identifiers.
 
+### Post-run menu
+
+After the summary prints, the script now asks what you want to do next:
+
+1. **Rerun sync** — Immediately reprocess the same source and target settings (skips the dashboard).
+2. **Back to main menu** — Returns to the dashboard so you can tweak modes, sources, or prerequisites before running again.
+3. **Quit** — Ends the session and leaves the console open.
+
+The selection is also logged in `openidsync.log`, so you have an audit trail of post-run decisions.
+
 ## Why this is safe (least privilege by design)
 
 - Least privilege: Only Graph read-only application permissions are granted to the app: `User.Read.All` and `Directory.Read.All`. The script never writes to Entra ID.
@@ -242,6 +253,7 @@ Step 3 — Use App-only on the next run
 	- `SuggestRemovals` (bool): If true, after import it lists AD users with a `mail` attribute in the target OU that are not present in the CSV and are not managed by this tool (it never deletes).
 	- `SkipUserBasedOnDisplayName` (array of strings): Substrings that, if found in `Display name`, skip processing that row. Defaults if omitted: `(Archive)`, `(Temp)`.
 	- `SkipUserBasedOnUserPrincipalName` (array of strings): Substrings that, if found in UPN, skip processing that row. Defaults if omitted: `#EXT#`, `Temporary`. Additionally, base substrings `archiv` and `temp` are always enforced even if not listed, and all matching is case‑insensitive.
+	- `GroupSecurityExceptions` (array of strings): Display names of non-security source groups that should receive an additional `Sec_` prefixed security group clone with mirrored membership in AD.
  
 - `LoggingConfig`:
 	- `Mode` (string): `File`, `Syslog`, or `Both`. Default: `File`.
@@ -283,7 +295,8 @@ Example JSON (trimmed):
 		"PreferredSource": "Online",
 		"SuggestRemovals": true,
 		"SkipUserBasedOnDisplayName": ["(Archive)", "(Temp)"],
-		"SkipUserBasedOnUserPrincipalName": ["#EXT#", "Temporary"]
+		"SkipUserBasedOnUserPrincipalName": ["#EXT#", "Temporary"],
+		"GroupSecurityExceptions": ["Gepteszt"]
 	}
 }
 ```
