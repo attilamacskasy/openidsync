@@ -94,6 +94,28 @@ function Get-PasswordCredentialStatus {
     return [pscustomobject]$result
 }
 
+function Resolve-PasswordCredentialPath {
+    param(
+        [string]$ProvidedPath,
+        [string]$ConfigPath
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($ProvidedPath)) { return $ProvidedPath }
+
+    $baseDir = $null
+    if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
+        try { $baseDir = Split-Path -Path $ConfigPath -Parent } catch { $baseDir = $null }
+    }
+    if (-not $baseDir) {
+        try { $baseDir = (Get-Location).ProviderPath } catch { $baseDir = $null }
+    }
+    if (-not $baseDir -and $PSScriptRoot) { $baseDir = $PSScriptRoot }
+    if (-not $baseDir) { return $ProvidedPath }
+
+    $logDir = Join-Path -Path $baseDir -ChildPath 'log'
+    return Join-Path -Path $logDir -ChildPath 'openidsync-credentials.csv'
+}
+
 function Get-OnlineRegistrationStatus {
     param(
         [string]$TenantId,
@@ -538,7 +560,8 @@ function Get-OpenIdSyncDashboardState {
         $preferredSecretName = [string]$onlineConfig.OnlineSyncConfig.ClientSecretEnvVar
     }
     $secretInfo = Get-SecretEnvironmentInfo -PreferredName $preferredSecretName
-    $passwordStatus = Get-PasswordCredentialStatus -Path $PasswordFilePath
+    $resolvedPasswordPath = Resolve-PasswordCredentialPath -ProvidedPath $PasswordFilePath -ConfigPath $ConfigPath
+    $passwordStatus = Get-PasswordCredentialStatus -Path $resolvedPasswordPath
     $reqStatus = Get-RequirementStatuses -BaseConfig $baseConfig -OnlineConfig $onlineConfig -SecretInfo $secretInfo -ForcePermissionRefresh:$ForcePermissionRefresh -ForceOnlineRefresh:$ForceOnlineRefresh
 
     $usc = $null
@@ -589,7 +612,7 @@ function Get-OpenIdSyncDashboardState {
         TargetDisplay        = $targetDisplay
         ConfigPath           = $ConfigPath
         OnlineConfigPath     = $OnlineConfigPath
-        PasswordFilePath     = $PasswordFilePath
+    PasswordFilePath     = $resolvedPasswordPath
     }
 }
 
@@ -984,12 +1007,36 @@ function Invoke-Requirement2Bootstrap {
 }
 
 function Invoke-PasswordCredentialRedaction {
-    param([string]$PasswordFilePath)
+    param(
+        [string]$PasswordFilePath,
+        [psobject]$DashboardState
+    )
+
+    $fallbackUsed = [string]::IsNullOrWhiteSpace($PasswordFilePath)
+    $configPath = $null
+    if ($DashboardState -and $DashboardState.PSObject.Properties['ConfigPath']) { $configPath = [string]$DashboardState.ConfigPath }
+    $resolvedPath = Resolve-PasswordCredentialPath -ProvidedPath $PasswordFilePath -ConfigPath $configPath
+
+    if ([string]::IsNullOrWhiteSpace($resolvedPath)) {
+        Write-Host 'Password credentials path is not configured. Run a synchronization first to generate the credentials file.' -ForegroundColor Yellow
+        [void](Read-Host 'Press Enter to continue...')
+        return
+    }
+
+    if ($fallbackUsed -and -not [string]::IsNullOrWhiteSpace($PasswordFilePath) -and -not [string]::Equals($PasswordFilePath, $resolvedPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Write-Host ("Using resolved password file path: {0}" -f $resolvedPath) -ForegroundColor DarkGray
+    } elseif ($fallbackUsed) {
+        Write-Host ("Default password file path: {0}" -f $resolvedPath) -ForegroundColor DarkGray
+    }
+
+    $PasswordFilePath = $resolvedPath
+
     if (-not (Test-Path -LiteralPath $PasswordFilePath)) {
         Write-Host ("Password credentials file not found: {0}" -f $PasswordFilePath) -ForegroundColor Yellow
         [void](Read-Host 'Press Enter to continue...')
         return
     }
+
     $backupPath = "$PasswordFilePath.bak"
     try { Copy-Item -LiteralPath $PasswordFilePath -Destination $backupPath -Force }
     catch {
@@ -1350,7 +1397,7 @@ function Invoke-OpenIdSyncDashboard {
             }
             '10' {
                 if ($state.AllRequirementsMet) {
-                    Invoke-PasswordCredentialRedaction -PasswordFilePath $PasswordFilePath
+                    Invoke-PasswordCredentialRedaction -PasswordFilePath $PasswordFilePath -DashboardState $state
                 } else {
                     Write-Host 'Resolve requirements before managing password file.' -ForegroundColor Yellow
                     [void](Read-Host 'Press Enter to continue...')
