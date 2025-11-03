@@ -1,9 +1,0 @@
-﻿{
-    "OnlineSyncConfig":  {
-                             "AppRegistrationName":  "OpenIDSync_org_Entra_Sync_Windows_AD",
-                             "TenantId":  "fab0318d-8709-4a2e-8be0-18e0235be73b",
-                             "ClientId":  "f6c9fd96-ea8b-4e3a-b3b5-2843e0d93bb7",
-                             "SpObjectId":  "3ee2102e-93c5-4cc7-8360-3654bcb594db",
-                             "ClientSecretEnvVar":  "OPENIDSYNC_CLIENT_SECRET"
-                         }
-}
