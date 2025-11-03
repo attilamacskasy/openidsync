@@ -325,6 +325,35 @@ function Write-ValueSegmentsLine {
     Write-Host ''
 }
 
+function Write-DangerZoneBanner {
+    param([string]$Message)
+
+    Write-Host ''
+    Write-Host '###############################################################' -ForegroundColor Red
+    Write-Host '#                         DANGER ZONE                          #' -ForegroundColor Red
+    Write-Host '###############################################################' -ForegroundColor Red
+    if (-not [string]::IsNullOrWhiteSpace($Message)) {
+        Write-Host $Message -ForegroundColor Red
+        Write-Host '---------------------------------------------------------------' -ForegroundColor Red
+    }
+    Write-Host 'Proceed ONLY if you understand the consequences.' -ForegroundColor Red
+    Write-Host 'This action may permanently remove data or configuration.' -ForegroundColor Red
+    Write-Host 'Create backups and confirm scope before continuing.' -ForegroundColor Red
+    Write-Host '###############################################################' -ForegroundColor Red
+    Write-Host ''
+}
+
+function Get-DashboardBaseDirectory {
+    param([string]$ConfigPath)
+
+    if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
+        try { return Split-Path -Path $ConfigPath -Parent } catch {}
+    }
+    if ($PSScriptRoot) { return $PSScriptRoot }
+    try { return (Get-Location).ProviderPath } catch {}
+    return (Get-Location).Path
+}
+
 function New-RequirementStatus {
     param(
         [int]$Id,
@@ -548,7 +577,7 @@ function Get-OpenIdSyncDashboardState {
     param(
         [string]$ConfigPath,
         [string]$OnlineConfigPath,
-        [string]$PasswordFilePath,
+        [string]$CredentialFilePath,
         [switch]$ForcePermissionRefresh,
         [switch]$ForceOnlineRefresh
     )
@@ -560,8 +589,8 @@ function Get-OpenIdSyncDashboardState {
         $preferredSecretName = [string]$onlineConfig.OnlineSyncConfig.ClientSecretEnvVar
     }
     $secretInfo = Get-SecretEnvironmentInfo -PreferredName $preferredSecretName
-    $resolvedPasswordPath = Resolve-PasswordCredentialPath -ProvidedPath $PasswordFilePath -ConfigPath $ConfigPath
-    $passwordStatus = Get-PasswordCredentialStatus -Path $resolvedPasswordPath
+    $resolvedCredentialPath = Resolve-PasswordCredentialPath -ProvidedPath $CredentialFilePath -ConfigPath $ConfigPath
+    $passwordStatus = Get-PasswordCredentialStatus -Path $resolvedCredentialPath
     $reqStatus = Get-RequirementStatuses -BaseConfig $baseConfig -OnlineConfig $onlineConfig -SecretInfo $secretInfo -ForcePermissionRefresh:$ForcePermissionRefresh -ForceOnlineRefresh:$ForceOnlineRefresh
 
     $usc = $null
@@ -612,7 +641,7 @@ function Get-OpenIdSyncDashboardState {
         TargetDisplay        = $targetDisplay
         ConfigPath           = $ConfigPath
         OnlineConfigPath     = $OnlineConfigPath
-    PasswordFilePath     = $resolvedPasswordPath
+        CredentialFilePath   = $resolvedCredentialPath
     }
 }
 
@@ -893,6 +922,11 @@ function Write-OpenIdSyncDashboard {
         Write-Host ' 10) Remove passwords from Password credentials file (after you backed up initial/temporary passwords in secure location)'
         Write-Host '     This file can be used to feed OpenGWTools and create point to site road warrior VPN for users stored in this file.'
         Write-Host ''
+        Write-Host ' !!! DANGER ZONE !!!' -ForegroundColor Red
+    Write-Host ' 80) Remove OpenIDSync-managed users from Windows Active Directory' -ForegroundColor Red
+    Write-Host ' 81) Remove OpenIDSync-managed groups (and memberships) from Windows Active Directory' -ForegroundColor Red
+    Write-Host ' 82) Uninstall OpenIDSync components (environment cleanup)' -ForegroundColor Red
+        Write-Host ''
     }
     Write-Host ' 11) View configuration details'
     if ($State.AllRequirementsMet) {
@@ -1008,14 +1042,13 @@ function Invoke-Requirement2Bootstrap {
 
 function Invoke-PasswordCredentialRedaction {
     param(
-        [string]$PasswordFilePath,
+        [string]$CredentialFilePath,
         [psobject]$DashboardState
     )
 
-    $fallbackUsed = [string]::IsNullOrWhiteSpace($PasswordFilePath)
     $configPath = $null
     if ($DashboardState -and $DashboardState.PSObject.Properties['ConfigPath']) { $configPath = [string]$DashboardState.ConfigPath }
-    $resolvedPath = Resolve-PasswordCredentialPath -ProvidedPath $PasswordFilePath -ConfigPath $configPath
+    $resolvedPath = Resolve-PasswordCredentialPath -ProvidedPath $CredentialFilePath -ConfigPath $configPath
 
     if ([string]::IsNullOrWhiteSpace($resolvedPath)) {
         Write-Host 'Password credentials path is not configured. Run a synchronization first to generate the credentials file.' -ForegroundColor Yellow
@@ -1023,29 +1056,30 @@ function Invoke-PasswordCredentialRedaction {
         return
     }
 
-    if ($fallbackUsed -and -not [string]::IsNullOrWhiteSpace($PasswordFilePath) -and -not [string]::Equals($PasswordFilePath, $resolvedPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $hadExplicitPath = -not [string]::IsNullOrWhiteSpace($CredentialFilePath)
+    if ($hadExplicitPath -and -not [string]::Equals($CredentialFilePath, $resolvedPath, [System.StringComparison]::OrdinalIgnoreCase)) {
         Write-Host ("Using resolved password file path: {0}" -f $resolvedPath) -ForegroundColor DarkGray
-    } elseif ($fallbackUsed) {
+    } elseif (-not $hadExplicitPath) {
         Write-Host ("Default password file path: {0}" -f $resolvedPath) -ForegroundColor DarkGray
     }
 
-    $PasswordFilePath = $resolvedPath
+    $credentialPath = $resolvedPath
 
-    if (-not (Test-Path -LiteralPath $PasswordFilePath)) {
-        Write-Host ("Password credentials file not found: {0}" -f $PasswordFilePath) -ForegroundColor Yellow
+    if (-not (Test-Path -LiteralPath $credentialPath)) {
+        Write-Host ("Password credentials file not found: {0}" -f $credentialPath) -ForegroundColor Yellow
         [void](Read-Host 'Press Enter to continue...')
         return
     }
 
-    $backupPath = "$PasswordFilePath.bak"
-    try { Copy-Item -LiteralPath $PasswordFilePath -Destination $backupPath -Force }
+    $backupPath = "$credentialPath.bak"
+    try { Copy-Item -LiteralPath $credentialPath -Destination $backupPath -Force }
     catch {
         Write-Host ("Failed to create backup: {0}" -f $_.Exception.Message) -ForegroundColor Red
         [void](Read-Host 'Press Enter to continue...')
         return
     }
     try {
-        $rows = Import-Csv -LiteralPath $PasswordFilePath
+        $rows = Import-Csv -LiteralPath $credentialPath
         if ($rows.Count -eq 0) {
             Write-Host 'Password credentials file contains no records. Backup created, nothing to redact.' -ForegroundColor Yellow
         } else {
@@ -1054,14 +1088,708 @@ function Invoke-PasswordCredentialRedaction {
                     $row.GeneratedPassword = Protect-PasswordValue -Value $row.GeneratedPassword
                 }
             }
-            $rows | Export-Csv -LiteralPath $PasswordFilePath -Encoding UTF8 -NoTypeInformation -Force
-            Write-Host ("Passwords redacted in {0}. Backup saved to {1}." -f $PasswordFilePath, $backupPath) -ForegroundColor Green
+            $rows | Export-Csv -LiteralPath $credentialPath -Encoding UTF8 -NoTypeInformation -Force
+            Write-Host ("Passwords redacted in {0}. Backup saved to {1}." -f $credentialPath, $backupPath) -ForegroundColor Green
             try { Write-Log -Level 'ACTION' -Message "Passwords redacted in credentials file." } catch {}
         }
     } catch {
         Write-Host ("Failed to redact passwords: {0}" -f $_.Exception.Message) -ForegroundColor Red
     }
     [void](Read-Host 'Press Enter to continue...')
+}
+
+function Invoke-DangerZoneRemoveManagedUsers {
+    param([psobject]$State)
+
+    Write-DangerZoneBanner -Message 'Remove all OpenIDSync-managed users from Windows Active Directory.'
+
+    $usc = $null
+    $defaultSearchBase = $null
+    if ($State -and $State.BaseConfig -and $State.BaseConfig.PSObject.Properties['UserSyncConfig']) {
+        $usc = $State.BaseConfig.UserSyncConfig
+        if ($usc -and $usc.PSObject.Properties['DefaultOU'] -and -not [string]::IsNullOrWhiteSpace($usc.DefaultOU)) {
+            $defaultSearchBase = [string]$usc.DefaultOU
+        }
+    }
+
+    $searchBase = $defaultSearchBase
+    if (-not [string]::IsNullOrWhiteSpace($defaultSearchBase)) {
+        Write-Host ("Default SearchBase from config: {0}" -f $defaultSearchBase) -ForegroundColor Yellow
+        $override = Read-Host 'Press Enter to accept or type an alternate SearchBase DN'
+        if (-not [string]::IsNullOrWhiteSpace($override)) { $searchBase = $override }
+    }
+    if ([string]::IsNullOrWhiteSpace($searchBase)) {
+        $searchBase = Read-Host 'Enter SearchBase distinguishedName to scan (e.g. OU=Users,DC=example,DC=com)'
+    }
+    if ([string]::IsNullOrWhiteSpace($searchBase)) {
+        Write-Host 'SearchBase is required. Operation cancelled.' -ForegroundColor Yellow
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    $skipUpnValues = @()
+    $skipSamValues = @()
+    if ($usc) {
+        $dangerZoneSkip = $null
+        if ($usc.PSObject.Properties['DangerZoneSkip']) { $dangerZoneSkip = $usc.DangerZoneSkip }
+        if ($dangerZoneSkip) {
+            $userSkipConfig = $null
+            if ($dangerZoneSkip.PSObject.Properties['Users']) {
+                $userSkipConfig = $dangerZoneSkip.Users
+            } elseif ($dangerZoneSkip.PSObject.Properties['UserPrincipalNames'] -or $dangerZoneSkip.PSObject.Properties['SamAccountNames']) {
+                $userSkipConfig = $dangerZoneSkip
+            }
+            if ($userSkipConfig) {
+                if ($userSkipConfig.PSObject.Properties['UserPrincipalNames']) {
+                    foreach ($value in @($userSkipConfig.UserPrincipalNames)) {
+                        if (-not [string]::IsNullOrWhiteSpace($value)) { $skipUpnValues += ([string]$value).Trim() }
+                    }
+                }
+                if ($userSkipConfig.PSObject.Properties['SamAccountNames']) {
+                    foreach ($value in @($userSkipConfig.SamAccountNames)) {
+                        if (-not [string]::IsNullOrWhiteSpace($value)) { $skipSamValues += ([string]$value).Trim() }
+                    }
+                }
+            }
+        }
+        if ($usc.PSObject.Properties['DangerZoneSkipUserPrincipalNames']) {
+            foreach ($value in @($usc.DangerZoneSkipUserPrincipalNames)) {
+                if (-not [string]::IsNullOrWhiteSpace($value)) { $skipUpnValues += ([string]$value).Trim() }
+            }
+        }
+        if ($usc.PSObject.Properties['DangerZoneSkipSamAccountNames']) {
+            foreach ($value in @($usc.DangerZoneSkipSamAccountNames)) {
+                if (-not [string]::IsNullOrWhiteSpace($value)) { $skipSamValues += ([string]$value).Trim() }
+            }
+        }
+    }
+
+    $skipUpnSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($value in $skipUpnValues) {
+        if (-not [string]::IsNullOrWhiteSpace($value)) { [void]$skipUpnSet.Add($value) }
+    }
+    $skipSamSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($value in $skipSamValues) {
+        if (-not [string]::IsNullOrWhiteSpace($value)) { [void]$skipSamSet.Add($value) }
+    }
+
+    $configPathForBase = $null
+    if ($State -and $State.PSObject.Properties['ConfigPath']) {
+        $configPathForBase = [string]$State.ConfigPath
+    }
+    $baseDir = Get-DashboardBaseDirectory -ConfigPath $configPathForBase
+    if ([string]::IsNullOrWhiteSpace($baseDir)) {
+        try { $baseDir = (Get-Location).ProviderPath } catch { $baseDir = (Get-Location).Path }
+    }
+    $logDir = Join-Path -Path $baseDir -ChildPath 'log'
+    try {
+        if (-not (Test-Path -LiteralPath $logDir)) {
+            New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+        }
+    } catch {
+        Write-Host ("Failed to prepare log directory: {0}" -f $_.Exception.Message) -ForegroundColor Red
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $logFile = Join-Path -Path $logDir -ChildPath ("openidsync_danger_remove_{0}.log" -f $timestamp)
+
+    function Write-DangerLog {
+        param(
+            [string]$Message,
+            [ValidateSet('INFO','WARN','ERROR','ACTION','RESULT')][string]$Level = 'INFO'
+        )
+        $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+        $line = "[$ts] [$Level] $Message"
+        try { $line | Out-File -FilePath $logFile -Encoding UTF8 -Append } catch {}
+        $color = switch ($Level) {
+            'ERROR' { 'Red' }
+            'WARN'  { 'Yellow' }
+            'ACTION' { 'Magenta' }
+            'RESULT' { 'Green' }
+            default { 'White' }
+        }
+        Write-Host $line -ForegroundColor $color
+    }
+
+    if ($skipUpnSet.Count -gt 0 -or $skipSamSet.Count -gt 0) {
+        $skipUpnDisplay = if ($skipUpnSet.Count -gt 0) { (@($skipUpnSet) -join ', ') } else { 'none' }
+        $skipSamDisplay = if ($skipSamSet.Count -gt 0) { (@($skipSamSet) -join ', ') } else { 'none' }
+        Write-Host ("Configured to skip {0} user principal name(s) and {1} sAMAccountName(s)." -f $skipUpnSet.Count, $skipSamSet.Count) -ForegroundColor Yellow
+        Write-DangerLog -Level 'INFO' -Message ("Configured skips -> UPNs: {0}; sAMAccountNames: {1}" -f $skipUpnDisplay, $skipSamDisplay)
+    }
+
+    Write-DangerLog -Level 'INFO' -Message ("Audit log initialized: {0}" -f $logFile)
+    Write-DangerLog -Level 'INFO' -Message ("SearchBase: {0}" -f $searchBase)
+
+    try {
+        if (-not (Get-Module -Name ActiveDirectory -ErrorAction SilentlyContinue)) {
+            if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) {
+                throw 'Module ActiveDirectory not found. Install RSAT Active Directory tools and retry.'
+            }
+            Import-Module ActiveDirectory -ErrorAction Stop
+        }
+    } catch {
+        Write-DangerLog -Level 'ERROR' -Message ("Failed to load ActiveDirectory module: {0}" -f $_.Exception.Message)
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    $confirm1 = Read-Host "Type 'I UNDERSTAND' to continue or anything else to cancel"
+    if ($confirm1 -ne 'I UNDERSTAND') {
+        Write-DangerLog -Level 'INFO' -Message 'Aborted at first confirmation prompt.'
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    $confirm2 = Read-Host "Type 'DELETE' to confirm permanent deletion"
+    if ($confirm2 -ne 'DELETE') {
+        Write-DangerLog -Level 'INFO' -Message 'Aborted at second confirmation prompt.'
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    $previewChoice = (Read-Host 'Run in preview mode (WhatIf) without deleting users? [Y/N]').Trim()
+    $whatIf = $false
+    if ($previewChoice -match '^(Y|YES)$') { $whatIf = $true }
+
+    Write-DangerLog -Level 'ACTION' -Message 'Scanning for OpenIDSync-managed users...'
+    $candidates = @()
+    $matchedTotal = 0
+    $skipped = 0
+    try {
+        $users = Get-ADUser -SearchBase $searchBase -LDAPFilter '(objectClass=user)' -Properties description,displayName,samAccountName,userPrincipalName,distinguishedName -ResultSetSize $null
+        foreach ($user in $users) {
+            if ($user.Description -and ($user.Description -match '\[openidsync\.org\]')) {
+                $matchedTotal++
+                $upn = $null
+                if ($user.PSObject.Properties['UserPrincipalName']) { $upn = [string]$user.UserPrincipalName }
+                $sam = $null
+                if ($user.PSObject.Properties['SamAccountName']) { $sam = [string]$user.SamAccountName }
+                $skipByUpn = $false
+                if ($upn -and $skipUpnSet.Contains($upn)) { $skipByUpn = $true }
+                $skipBySam = $false
+                if ($sam -and $skipSamSet.Contains($sam)) { $skipBySam = $true }
+                if ($skipByUpn -or $skipBySam) {
+                    $reasonParts = @()
+                    if ($skipByUpn) { $reasonParts += 'UPN match' }
+                    if ($skipBySam) { $reasonParts += 'sAMAccountName match' }
+                    if ($reasonParts.Count -eq 0) { $reasonParts = @('Configured exclusion') }
+                    $reasonText = $reasonParts -join ', '
+                    $upnDisplay = if ($upn) { $upn } else { '(no UPN)' }
+                    $samDisplay = if ($sam) { $sam } else { '(no sAMAccountName)' }
+                    Write-DangerLog -Level 'INFO' -Message ("Skipping excluded user: {0} ({1}) - {2}" -f $samDisplay, $upnDisplay, $reasonText)
+                    $skipped++
+                    continue
+                }
+                $candidates += $user
+            }
+        }
+    } catch {
+        Write-DangerLog -Level 'ERROR' -Message ("Failed to query Active Directory: {0}" -f $_.Exception.Message)
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    Write-DangerLog -Level 'INFO' -Message ("Matched {0} managed user(s); skipped {1} due to configuration." -f $matchedTotal, $skipped)
+    $found = $candidates.Count
+    Write-DangerLog -Level 'INFO' -Message ("Found {0} user(s) eligible for deletion after exclusions." -f $found)
+    if ($found -eq 0) {
+        if ($matchedTotal -gt 0 -and $skipped -gt 0) {
+            Write-Host 'All OpenIDSync-managed users matched the configured skip list. No deletion candidates remain.' -ForegroundColor Yellow
+            Write-DangerLog -Level 'INFO' -Message 'All matched users were skipped due to configured exclusions.'
+        } else {
+            Write-Host 'No OpenIDSync-managed users found under the specified SearchBase.' -ForegroundColor Yellow
+        }
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    $backupPath = Join-Path -Path $logDir -ChildPath ("openidsync_danger_backup_{0}.csv" -f $timestamp)
+    try {
+        $candidates | Select-Object SamAccountName,UserPrincipalName,DisplayName,DistinguishedName | Export-Csv -Path $backupPath -NoTypeInformation -Encoding UTF8
+        Write-DangerLog -Level 'INFO' -Message ("Backup exported to {0}" -f $backupPath)
+    } catch {
+        Write-DangerLog -Level 'WARN' -Message ("Failed to export backup list: {0}" -f $_.Exception.Message)
+    }
+
+    $actionWord = if ($whatIf) { 'preview removal of' } else { 'delete' }
+    $finalConfirm = (Read-Host ("Last chance: proceed to {0} {1} user(s) under {2}? [Y/N]" -f $actionWord, $found, $searchBase)).Trim()
+    if (-not ($finalConfirm -match '^(Y|YES)$')) {
+        Write-DangerLog -Level 'INFO' -Message 'Aborted at final confirmation prompt.'
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    $removed = 0
+    $failed = 0
+
+    foreach ($candidate in $candidates) {
+        $identity = $candidate.DistinguishedName
+        if ($whatIf) {
+            Write-DangerLog -Level 'ACTION' -Message ("WhatIf: Remove-ADUser -Identity '{0}'" -f $identity)
+            continue
+        }
+        try {
+            Remove-ADUser -Identity $identity -Confirm:$false -ErrorAction Stop
+            Write-DangerLog -Level 'RESULT' -Message ("Deleted: {0} ({1})" -f $candidate.SamAccountName, $candidate.UserPrincipalName)
+            $removed++
+        } catch {
+            Write-DangerLog -Level 'ERROR' -Message ("Failed to delete {0}: {1}" -f $candidate.UserPrincipalName, $_.Exception.Message)
+            $failed++
+        }
+    }
+
+    Write-Host ''
+    Write-Host '==================== DANGER ZONE SUMMARY ====================' -ForegroundColor Red
+    Write-Host ("Found:    {0}" -f $found) -ForegroundColor Red
+    if ($whatIf) {
+        Write-Host ("Previewed: {0}" -f $found) -ForegroundColor Yellow
+        Write-Host 'Removed:   0 (preview mode)' -ForegroundColor Yellow
+    } else {
+        Write-Host ("Removed:  {0}" -f $removed) -ForegroundColor Red
+    }
+    Write-Host ("Skipped:  {0}" -f $skipped) -ForegroundColor Yellow
+    Write-Host ("Failed:   {0}" -f $failed) -ForegroundColor Red
+    Write-Host '=============================================================' -ForegroundColor Red
+    Write-Host ''
+
+    if ($whatIf) {
+        Write-DangerLog -Level 'INFO' -Message ("Preview completed. {0} user(s) would be removed. Skipped: {1} user(s)." -f $found, $skipped)
+    } else {
+        Write-DangerLog -Level 'INFO' -Message ("Summary -> Found: {0}, Removed: {1}, Failed: {2}, Skipped: {3}" -f $found, $removed, $failed, $skipped)
+    }
+
+    [void](Read-Host 'Press Enter to return to the dashboard...')
+}
+
+function Invoke-DangerZoneRemoveManagedGroups {
+    param([psobject]$State)
+
+    Write-DangerZoneBanner -Message 'Remove all OpenIDSync-managed groups (and memberships) from Windows Active Directory.'
+
+    $defaultSearchBase = $null
+    if ($State -and $State.BaseConfig -and $State.BaseConfig.PSObject.Properties['UserSyncConfig']) {
+        $usc = $State.BaseConfig.UserSyncConfig
+        if ($usc) {
+            $groupOuPropertyCandidates = @('GroupTargetOU','GroupsTargetOU','TargetGroupOU','GroupsDefaultOU','GroupDefaultOU','GroupsOU','GroupOU')
+            foreach ($propName in $groupOuPropertyCandidates) {
+                if ($usc.PSObject.Properties[$propName] -and -not [string]::IsNullOrWhiteSpace($usc.$propName)) {
+                    $defaultSearchBase = [string]$usc.$propName
+                    break
+                }
+            }
+            if ([string]::IsNullOrWhiteSpace($defaultSearchBase) -and $usc.PSObject.Properties['DefaultOU'] -and -not [string]::IsNullOrWhiteSpace($usc.DefaultOU)) {
+                $defaultSearchBase = [string]$usc.DefaultOU
+            }
+        }
+    }
+
+    $searchBase = $defaultSearchBase
+    if (-not [string]::IsNullOrWhiteSpace($defaultSearchBase)) {
+        Write-Host ("Default SearchBase from config: {0}" -f $defaultSearchBase) -ForegroundColor Yellow
+        $override = Read-Host 'Press Enter to accept or type an alternate SearchBase DN for groups'
+        if (-not [string]::IsNullOrWhiteSpace($override)) { $searchBase = $override }
+    }
+    if ([string]::IsNullOrWhiteSpace($searchBase)) {
+        $searchBase = Read-Host 'Enter SearchBase distinguishedName to scan for managed groups (e.g. OU=Groups,DC=example,DC=com)'
+    }
+    if ([string]::IsNullOrWhiteSpace($searchBase)) {
+        Write-Host 'SearchBase is required. Operation cancelled.' -ForegroundColor Yellow
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    $configPathForBase = $null
+    if ($State -and $State.PSObject.Properties['ConfigPath']) {
+        $configPathForBase = [string]$State.ConfigPath
+    }
+    $baseDir = Get-DashboardBaseDirectory -ConfigPath $configPathForBase
+    if ([string]::IsNullOrWhiteSpace($baseDir)) {
+        try { $baseDir = (Get-Location).ProviderPath } catch { $baseDir = (Get-Location).Path }
+    }
+    $logDir = Join-Path -Path $baseDir -ChildPath 'log'
+    try {
+        if (-not (Test-Path -LiteralPath $logDir)) {
+            New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+        }
+    } catch {
+        Write-Host ("Failed to prepare log directory: {0}" -f $_.Exception.Message) -ForegroundColor Red
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $logFile = Join-Path -Path $logDir -ChildPath ("openidsync_danger_remove_groups_{0}.log" -f $timestamp)
+
+    function Write-DangerGroupLog {
+        param(
+            [string]$Message,
+            [ValidateSet('INFO','WARN','ERROR','ACTION','RESULT')][string]$Level = 'INFO'
+        )
+        $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+        $line = "[$ts] [$Level] $Message"
+        try { $line | Out-File -FilePath $logFile -Encoding UTF8 -Append } catch {}
+        $color = switch ($Level) {
+            'ERROR' { 'Red' }
+            'WARN'  { 'Yellow' }
+            'ACTION' { 'Magenta' }
+            'RESULT' { 'Green' }
+            default { 'White' }
+        }
+        Write-Host $line -ForegroundColor $color
+    }
+
+    Write-DangerGroupLog -Level 'INFO' -Message ("Audit log initialized: {0}" -f $logFile)
+    Write-DangerGroupLog -Level 'INFO' -Message ("SearchBase: {0}" -f $searchBase)
+
+    try {
+        if (-not (Get-Module -Name ActiveDirectory -ErrorAction SilentlyContinue)) {
+            if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) {
+                throw 'Module ActiveDirectory not found. Install RSAT Active Directory tools and retry.'
+            }
+            Import-Module ActiveDirectory -ErrorAction Stop
+        }
+    } catch {
+        Write-DangerGroupLog -Level 'ERROR' -Message ("Failed to load ActiveDirectory module: {0}" -f $_.Exception.Message)
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    $confirm1 = Read-Host "Type 'I UNDERSTAND' to continue or anything else to cancel"
+    if ($confirm1 -ne 'I UNDERSTAND') {
+        Write-DangerGroupLog -Level 'INFO' -Message 'Aborted at first confirmation prompt.'
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    $confirm2 = Read-Host "Type 'DELETE GROUPS' to confirm permanent deletion"
+    if ($confirm2 -ne 'DELETE GROUPS') {
+        Write-DangerGroupLog -Level 'INFO' -Message 'Aborted at second confirmation prompt.'
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    $previewChoice = (Read-Host 'Run in preview mode (WhatIf) without deleting groups? [Y/N]').Trim()
+    $whatIf = $false
+    if ($previewChoice -match '^(Y|YES)$') { $whatIf = $true }
+
+    Write-DangerGroupLog -Level 'ACTION' -Message 'Scanning for OpenIDSync-managed groups...'
+    $groups = @()
+    try {
+        $groups = Get-ADGroup -SearchBase $searchBase -LDAPFilter '(objectClass=group)' -Properties Description,DisplayName,SamAccountName,DistinguishedName,GroupCategory,GroupScope -ResultSetSize $null
+    } catch {
+        Write-DangerGroupLog -Level 'ERROR' -Message ("Failed to query Active Directory: {0}" -f $_.Exception.Message)
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    $candidates = @()
+    foreach ($group in $groups) {
+        if ($group.Description -and ($group.Description -match '\[openidsync\.org\]')) {
+            $candidates += $group
+        }
+    }
+
+    $found = $candidates.Count
+    Write-DangerGroupLog -Level 'INFO' -Message ("Found {0} group(s) eligible for deletion." -f $found)
+    if ($found -eq 0) {
+        Write-Host 'No OpenIDSync-managed groups found under the specified SearchBase.' -ForegroundColor Yellow
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    $groupBackup = @()
+    $membershipBackup = @()
+
+    foreach ($candidate in $candidates) {
+        $members = @()
+        try {
+            $members = Get-ADGroupMember -Identity $candidate.DistinguishedName -Recursive:$false -ErrorAction Stop
+        } catch {
+            Write-DangerGroupLog -Level 'WARN' -Message ("Failed to enumerate members for {0}: {1}" -f $candidate.SamAccountName, $_.Exception.Message)
+        }
+
+        $parentGroups = @()
+        try {
+            $parentGroups = Get-ADPrincipalGroupMembership -Identity $candidate.DistinguishedName -ErrorAction SilentlyContinue
+        } catch {
+            Write-DangerGroupLog -Level 'WARN' -Message ("Failed to enumerate parent groups for {0}: {1}" -f $candidate.SamAccountName, $_.Exception.Message)
+        }
+
+        $memberCount = if ($members) { $members.Count } else { 0 }
+        $parentCount = if ($parentGroups) { $parentGroups.Count } else { 0 }
+
+        $groupBackup += [pscustomobject]@{
+            SamAccountName       = $candidate.SamAccountName
+            Name                 = $candidate.Name
+            GroupCategory        = $candidate.GroupCategory
+            GroupScope           = $candidate.GroupScope
+            Description          = $candidate.Description
+            MemberCount          = $memberCount
+            ParentGroupCount     = $parentCount
+            DistinguishedName    = $candidate.DistinguishedName
+        }
+
+        foreach ($member in $members) {
+            $memberSam = $null
+            if ($member.PSObject.Properties['SamAccountName']) { $memberSam = [string]$member.SamAccountName }
+            $memberUpn = $null
+            if ($member.PSObject.Properties['UserPrincipalName']) { $memberUpn = [string]$member.UserPrincipalName }
+            $membershipBackup += [pscustomobject]@{
+                GroupSamAccountName        = $candidate.SamAccountName
+                Relation                   = 'Member'
+                RelatedSamAccountName      = $memberSam
+                RelatedDistinguishedName   = $member.DistinguishedName
+                RelatedObjectClass         = $member.ObjectClass
+                RelatedUserPrincipalName   = $memberUpn
+            }
+        }
+
+        foreach ($parent in $parentGroups) {
+            $parentSam = $null
+            if ($parent.PSObject.Properties['SamAccountName']) { $parentSam = [string]$parent.SamAccountName }
+            $membershipBackup += [pscustomobject]@{
+                GroupSamAccountName        = $candidate.SamAccountName
+                Relation                   = 'ParentGroup'
+                RelatedSamAccountName      = $parentSam
+                RelatedDistinguishedName   = $parent.DistinguishedName
+                RelatedObjectClass         = $parent.ObjectClass
+                RelatedUserPrincipalName   = $null
+            }
+        }
+    }
+
+    $groupBackupPath = Join-Path -Path $logDir -ChildPath ("openidsync_danger_groups_{0}.csv" -f $timestamp)
+    try {
+        $groupBackup | Export-Csv -Path $groupBackupPath -NoTypeInformation -Encoding UTF8
+        Write-DangerGroupLog -Level 'INFO' -Message ("Group backup exported to {0}" -f $groupBackupPath)
+    } catch {
+        Write-DangerGroupLog -Level 'WARN' -Message ("Failed to export group backup: {0}" -f $_.Exception.Message)
+    }
+
+    if ($membershipBackup.Count -gt 0) {
+        $membershipBackupPath = Join-Path -Path $logDir -ChildPath ("openidsync_danger_group_links_{0}.csv" -f $timestamp)
+        try {
+            $membershipBackup | Export-Csv -Path $membershipBackupPath -NoTypeInformation -Encoding UTF8
+            Write-DangerGroupLog -Level 'INFO' -Message ("Membership backup exported to {0}" -f $membershipBackupPath)
+        } catch {
+            Write-DangerGroupLog -Level 'WARN' -Message ("Failed to export membership backup: {0}" -f $_.Exception.Message)
+        }
+    }
+
+    $actionWord = if ($whatIf) { 'preview removal of' } else { 'delete' }
+    $finalConfirm = (Read-Host ("Last chance: proceed to {0} {1} group(s) under {2}? [Y/N]" -f $actionWord, $found, $searchBase)).Trim()
+    if (-not ($finalConfirm -match '^(Y|YES)$')) {
+        Write-DangerGroupLog -Level 'INFO' -Message 'Aborted at final confirmation prompt.'
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    $removed = 0
+    $failed = 0
+    $parentMembershipsRemoved = 0
+
+    foreach ($candidate in $candidates) {
+        if ($whatIf) {
+            Write-DangerGroupLog -Level 'ACTION' -Message ("WhatIf: Remove-ADGroup -Identity '{0}'" -f $candidate.DistinguishedName)
+            continue
+        }
+
+        $parentGroups = @()
+        try {
+            $parentGroups = Get-ADPrincipalGroupMembership -Identity $candidate.DistinguishedName -ErrorAction SilentlyContinue
+        } catch {}
+
+        foreach ($parent in $parentGroups) {
+            try {
+                Remove-ADGroupMember -Identity $parent.DistinguishedName -Members $candidate.DistinguishedName -Confirm:$false -ErrorAction Stop
+                Write-DangerGroupLog -Level 'ACTION' -Message ("Removed group {0} from parent group {1}" -f $candidate.SamAccountName, $parent.SamAccountName)
+                $parentMembershipsRemoved++
+            } catch {
+                Write-DangerGroupLog -Level 'WARN' -Message ("Failed to remove group {0} from parent group {1}: {2}" -f $candidate.SamAccountName, $parent.SamAccountName, $_.Exception.Message)
+            }
+        }
+
+        try {
+            Remove-ADGroup -Identity $candidate.DistinguishedName -Confirm:$false -ErrorAction Stop
+            Write-DangerGroupLog -Level 'RESULT' -Message ("Deleted group: {0}" -f $candidate.SamAccountName)
+            $removed++
+        } catch {
+            Write-DangerGroupLog -Level 'ERROR' -Message ("Failed to delete group {0}: {1}" -f $candidate.SamAccountName, $_.Exception.Message)
+            $failed++
+        }
+    }
+
+    Write-Host ''
+    Write-Host '==================== DANGER ZONE SUMMARY ====================' -ForegroundColor Red
+    Write-Host ("Found:    {0}" -f $found) -ForegroundColor Red
+    if ($whatIf) {
+        Write-Host ("Previewed: {0}" -f $found) -ForegroundColor Yellow
+        Write-Host 'Removed:   0 (preview mode)' -ForegroundColor Yellow
+        Write-Host 'Parent memberships removed: 0 (preview mode)' -ForegroundColor Yellow
+        Write-Host 'Failed:   0 (preview mode)' -ForegroundColor Yellow
+    } else {
+        Write-Host ("Removed:  {0}" -f $removed) -ForegroundColor Red
+        Write-Host ("Parent memberships removed: {0}" -f $parentMembershipsRemoved) -ForegroundColor Red
+        Write-Host ("Failed:   {0}" -f $failed) -ForegroundColor Red
+    }
+    Write-Host '=============================================================' -ForegroundColor Red
+    Write-Host ''
+
+    if ($whatIf) {
+        Write-DangerGroupLog -Level 'INFO' -Message ("Preview completed. {0} group(s) would be removed." -f $found)
+    } else {
+        Write-DangerGroupLog -Level 'INFO' -Message ("Summary -> Found: {0}, Removed: {1}, Failed: {2}, ParentMembershipsRemoved: {3}" -f $found, $removed, $failed, $parentMembershipsRemoved)
+    }
+
+    [void](Read-Host 'Press Enter to return to the dashboard...')
+}
+
+function Invoke-DangerZoneUninstallOpenIdSync {
+    param([psobject]$State)
+
+    Write-DangerZoneBanner -Message 'Uninstall OpenIDSync components and reset local configuration.'
+
+    $configPath = $null
+    if ($State -and $State.PSObject.Properties['ConfigPath']) { $configPath = [string]$State.ConfigPath }
+    if ([string]::IsNullOrWhiteSpace($configPath)) {
+        $configPath = Join-Path -Path (Get-DashboardBaseDirectory -ConfigPath $null) -ChildPath '00_OpenIDSync_Config.json'
+    }
+
+    $onlineConfigPath = $null
+    if ($State -and $State.PSObject.Properties['OnlineConfigPath']) { $onlineConfigPath = [string]$State.OnlineConfigPath }
+    if ([string]::IsNullOrWhiteSpace($onlineConfigPath)) {
+        $onlineConfigPath = Join-Path -Path (Get-DashboardBaseDirectory -ConfigPath $configPath) -ChildPath '00_OpenIDSync_OnlineSyncConfig.json'
+    }
+
+    $secretEnvName = 'OPENIDSYNC_CLIENT_SECRET'
+    if ($State -and $State.PSObject.Properties['SecretInfo'] -and $State.SecretInfo -and $State.SecretInfo.PSObject.Properties['Name']) {
+        $candidateName = [string]$State.SecretInfo.Name
+        if (-not [string]::IsNullOrWhiteSpace($candidateName)) { $secretEnvName = $candidateName }
+    }
+
+    Write-Host 'This operation will attempt to:' -ForegroundColor Yellow
+    Write-Host '  - Clear the OpenIDSync client secret environment variable.' -ForegroundColor Yellow
+    Write-Host '  - Remove the Azure app registration and service principal (if found).' -ForegroundColor Yellow
+    Write-Host '  - Uninstall Microsoft Graph PowerShell modules used by OpenIDSync.' -ForegroundColor Yellow
+    Write-Host '  - Reset the online sync configuration JSON file.' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host ('Resolved config path: {0}' -f $configPath) -ForegroundColor DarkGray
+    Write-Host ('Resolved online config path: {0}' -f $onlineConfigPath) -ForegroundColor DarkGray
+    Write-Host ('Client secret environment variable: {0}' -f $secretEnvName) -ForegroundColor DarkGray
+    Write-Host ''
+
+    $skipEnv = $false
+    $skipApp = $false
+    $skipModules = $false
+    $skipConfig = $false
+
+    $choiceEnv = (Read-Host 'Skip environment variable cleanup? [y/N]').Trim()
+    if ($choiceEnv -match '^(Y|YES)$') { $skipEnv = $true }
+
+    $choiceApp = (Read-Host 'Skip Azure app registration removal? [y/N]').Trim()
+    if ($choiceApp -match '^(Y|YES)$') { $skipApp = $true }
+
+    $choiceModules = (Read-Host 'Skip Microsoft Graph module uninstall? [y/N]').Trim()
+    if ($choiceModules -match '^(Y|YES)$') { $skipModules = $true }
+
+    $choiceConfig = (Read-Host 'Skip online config reset? [y/N]').Trim()
+    if ($choiceConfig -match '^(Y|YES)$') { $skipConfig = $true }
+
+    $confirm1 = Read-Host "Type 'I UNDERSTAND' to continue or anything else to cancel"
+    if ($confirm1 -ne 'I UNDERSTAND') {
+        Write-Host 'Uninstall aborted at first confirmation prompt.' -ForegroundColor Yellow
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    $confirm2 = Read-Host "Type 'UNINSTALL' to confirm OpenIDSync uninstall"
+    if ($confirm2 -ne 'UNINSTALL') {
+        Write-Host 'Uninstall aborted at second confirmation prompt.' -ForegroundColor Yellow
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    $whatIfChoice = (Read-Host 'Run in preview mode (WhatIf) without making changes? [y/N]').Trim()
+    $whatIf = $false
+    if ($whatIfChoice -match '^(Y|YES)$') { $whatIf = $true }
+
+    try {
+        $result = Invoke-OpenIdSyncUninstall -ConfigPath $configPath -OnlineSyncConfigPath $onlineConfigPath -ClientSecretEnvVar $secretEnvName -SkipEnvVar:$skipEnv -SkipAppRemoval:$skipApp -SkipModuleRemoval:$skipModules -SkipConfigUpdate:$skipConfig -NonInteractive:$true -WhatIf:$whatIf
+    } catch {
+        Write-Host ("Uninstall routine failed: {0}" -f $_.Exception.Message) -ForegroundColor Red
+        [void](Read-Host 'Press Enter to return to the dashboard...')
+        return
+    }
+
+    Write-Host ''
+    if ($whatIf) {
+        Write-Host 'Preview mode complete. No changes were made.' -ForegroundColor Yellow
+    } else {
+        Write-Host 'Uninstall routine complete.' -ForegroundColor Green
+    }
+
+    if ($result) {
+        Write-Host ''
+        Write-Host '=== Uninstall Summary ===' -ForegroundColor Cyan
+        if ($result.EnvVarClearedScopes -and $result.EnvVarClearedScopes.Count -gt 0) {
+            Write-Host ("Environment variable cleared for scopes: {0}" -f ($result.EnvVarClearedScopes -join ', '))
+        } elseif ($skipEnv) {
+            Write-Host 'Environment variable cleanup skipped.' -ForegroundColor Yellow
+        } else {
+            Write-Host 'No environment variables were cleared.' -ForegroundColor Yellow
+        }
+        if ($result.EnvVarErrors -and $result.EnvVarErrors.Count -gt 0) {
+            Write-Host 'Environment cleanup warnings:' -ForegroundColor Yellow
+            foreach ($msg in $result.EnvVarErrors) { Write-Host ('  - {0}' -f $msg) -ForegroundColor Yellow }
+        }
+
+        if ($result.ServicePrincipalRemoved) {
+            Write-Host 'Service principal removed.'
+        } elseif ($skipApp) {
+            Write-Host 'Service principal removal skipped.' -ForegroundColor Yellow
+        } else {
+            Write-Host 'Service principal not removed (not found or unsuccessful).' -ForegroundColor Yellow
+        }
+
+        if ($result.ApplicationRemoved) {
+            Write-Host 'App registration removed.'
+        } elseif ($skipApp) {
+            Write-Host 'App registration removal skipped.' -ForegroundColor Yellow
+        } else {
+            Write-Host 'App registration not removed (not found or unsuccessful).' -ForegroundColor Yellow
+        }
+
+        if ($result.ModuleRemovalSucceeded -and $result.ModuleRemovalSucceeded.Count -gt 0) {
+            Write-Host ("Modules uninstalled: {0}" -f ($result.ModuleRemovalSucceeded -join ', '))
+        } elseif ($skipModules) {
+            Write-Host 'Module uninstall skipped.' -ForegroundColor Yellow
+        } else {
+            Write-Host 'No modules were uninstalled.' -ForegroundColor Yellow
+        }
+        if ($result.ModuleRemovalFailed -and $result.ModuleRemovalFailed.Count -gt 0) {
+            Write-Host 'Module uninstall warnings:' -ForegroundColor Yellow
+            foreach ($msg in $result.ModuleRemovalFailed) { Write-Host ('  - {0}' -f $msg) -ForegroundColor Yellow }
+        }
+
+        if ($result.ConfigReset) {
+            Write-Host 'Online sync configuration reset.'
+        } elseif ($skipConfig) {
+            Write-Host 'Online sync configuration reset skipped.' -ForegroundColor Yellow
+        } else {
+            Write-Host 'Online sync configuration not reset.' -ForegroundColor Yellow
+            if ($result.ConfigResetError) { Write-Host ('  Reason: {0}' -f $result.ConfigResetError) -ForegroundColor Yellow }
+        }
+
+        if ($result.Notes -and $result.Notes.Count -gt 0) {
+            Write-Host 'Additional notes:' -ForegroundColor Yellow
+            foreach ($note in $result.Notes) { Write-Host ('  - {0}' -f $note) -ForegroundColor Yellow }
+        }
+    }
+
+    [void](Read-Host 'Press Enter to return to the dashboard...')
 }
 
 function Invoke-OpenGwToolsRoadwarriorExport {
@@ -1237,7 +1965,7 @@ function Invoke-OpenIdSyncDashboard {
     param(
         [string]$ConfigPath,
         [string]$OnlineConfigPath,
-        [string]$PasswordFilePath,
+        [string]$CredentialFilePath,
         [string]$InitialSource,
         [string]$InitialTarget,
         [string]$DefaultOU
@@ -1247,7 +1975,7 @@ function Invoke-OpenIdSyncDashboard {
     $forceOnlineRefresh = $false
 
     while ($true) {
-        $state = Get-OpenIdSyncDashboardState -ConfigPath $ConfigPath -OnlineConfigPath $OnlineConfigPath -PasswordFilePath $PasswordFilePath -ForcePermissionRefresh:$forcePermissionRefresh -ForceOnlineRefresh:$forceOnlineRefresh
+    $state = Get-OpenIdSyncDashboardState -ConfigPath $ConfigPath -OnlineConfigPath $OnlineConfigPath -CredentialFilePath $CredentialFilePath -ForcePermissionRefresh:$forcePermissionRefresh -ForceOnlineRefresh:$forceOnlineRefresh
         if ([string]::IsNullOrWhiteSpace($state.PreferredSource) -and $InitialSource) {
             $state.PreferredSource = $InitialSource
         }
@@ -1260,7 +1988,7 @@ function Invoke-OpenIdSyncDashboard {
             if (-not $req.IsMet) { $available += [string]$req.Id }
         }
         if ($state.AllRequirementsMet) {
-            $available += '4','5','6','7','8','9','10','12','13'
+            $available += '4','5','6','7','8','9','10','12','13','80','81','82'
         }
         $available += '11','99'
 
@@ -1383,7 +2111,7 @@ function Invoke-OpenIdSyncDashboard {
                     Write-Host 'Resolve all requirements before starting synchronization.' -ForegroundColor Yellow
                     [void](Read-Host 'Press Enter to continue...')
                 } else {
-                    $final = Get-OpenIdSyncDashboardState -ConfigPath $ConfigPath -OnlineConfigPath $OnlineConfigPath -PasswordFilePath $PasswordFilePath
+                    $final = Get-OpenIdSyncDashboardState -ConfigPath $ConfigPath -OnlineConfigPath $OnlineConfigPath -CredentialFilePath $CredentialFilePath
                     return [pscustomobject]@{
                         StartSync       = $true
                         ExitRequested   = $false
@@ -1397,7 +2125,7 @@ function Invoke-OpenIdSyncDashboard {
             }
             '10' {
                 if ($state.AllRequirementsMet) {
-                    Invoke-PasswordCredentialRedaction -PasswordFilePath $PasswordFilePath -DashboardState $state
+                    Invoke-PasswordCredentialRedaction -CredentialFilePath $CredentialFilePath -DashboardState $state
                 } else {
                     Write-Host 'Resolve requirements before managing password file.' -ForegroundColor Yellow
                     [void](Read-Host 'Press Enter to continue...')
@@ -1419,6 +2147,30 @@ function Invoke-OpenIdSyncDashboard {
                     Invoke-OpenGwToolsRoadwarriorExport -State $state
                 } else {
                     Write-Host 'Resolve all requirements before exporting the OpenGWTools CSV.' -ForegroundColor Yellow
+                    [void](Read-Host 'Press Enter to continue...')
+                }
+            }
+            '80' {
+                if ($available -contains '80') {
+                    Invoke-DangerZoneRemoveManagedUsers -State $state
+                } else {
+                    Write-Host 'Danger zone options are only available after all requirements are satisfied.' -ForegroundColor Yellow
+                    [void](Read-Host 'Press Enter to continue...')
+                }
+            }
+            '81' {
+                if ($available -contains '81') {
+                    Invoke-DangerZoneRemoveManagedGroups -State $state
+                } else {
+                    Write-Host 'Danger zone options are only available after all requirements are satisfied.' -ForegroundColor Yellow
+                    [void](Read-Host 'Press Enter to continue...')
+                }
+            }
+            '82' {
+                if ($available -contains '82') {
+                    Invoke-DangerZoneUninstallOpenIdSync -State $state
+                } else {
+                    Write-Host 'Danger zone options are only available after all requirements are satisfied.' -ForegroundColor Yellow
                     [void](Read-Host 'Press Enter to continue...')
                 }
             }

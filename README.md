@@ -235,10 +235,9 @@ Once requirements 1–3 are satisfied, option **13** appears in the dashboard. T
 - `01_OpenIDSync_Prepare_Domain_Promotion.ps1` — Installs prerequisites (features and modules) and verifies DSC resources
 - `02_OpenIDSync_Domain_Promotion.ps1` — Promotes the server to the first DC using DSC (`ADDomain` resource)
 - `03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1` — Online (Graph) or CSV user sync into AD
-- `04_OpenIDSync_DANGER_Remove_Managed_Users.ps1` — DANGER ZONE cleanup tool that deletes only users managed by this tool
 - `97_Set_OPENIDSYNC_CLIENT_SECRET.ps1` — Helper to set the `OPENIDSYNC_CLIENT_SECRET` env var
 - `98_Reset_Azure_Login_Session.ps1` — Clears cached Graph/Az sessions and token caches
-- `99_Get-Module.ps1` — Diagnostics for loaded modules
+- **Dashboard DANGER ZONE (options 80–82)** — Remove OpenIDSync-managed AD users or groups, or run the full uninstall/cleanup sequence directly from the interactive menu
 
 ## Configuration (00_OpenIDSync_Config.json)
 - `DomainPromotionConfig`:
@@ -383,38 +382,18 @@ Notes:
 - Default logging mode is file‑only. To send logs to a remote syslog server, set `LoggingConfig.Mode` to `Syslog` or `Both` and configure `SyslogServer`/`SyslogPort`.
 - Rotation is not handled by the script. For long‑running systems, use external rotation (e.g., logrotate) or periodically archive the file.
 
-## DANGER ZONE — Managed users removal
+## DANGER ZONE — Dashboard cleanup options
 
-```diff
-- DANGER ZONE: This tool can permanently DELETE AD user objects managed by openidsync.
-```
+Once requirements 1–3 are satisfied, the dashboard unlocks a red "DANGER ZONE" block with the following helpers:
 
-Use `04_DANGER_Remove_OpenIDSync_Managed_Users.ps1` to wipe only users previously created/managed by this tool. A user is considered "managed" if their `description` contains the literal tag `[openidsync.org]`.
+ **80 — Remove OpenIDSync-managed users**. Scans the provided SearchBase (defaults to `UserSyncConfig.DefaultOU` when available) for users whose `description` contains `[openidsync.org]`. Exports a timestamped CSV, writes a dedicated log (e.g., `openidsync_danger_remove_20250101_010203.log`), supports WhatIf previews, and requires two confirmation prompts before deletion. Any user principal names or sAMAccountNames listed in `UserSyncConfig.DangerZoneSkip.Users` are automatically excluded (the default config shields `attila@macskasy.com` and `peter@macskasy.com`).
+- **81 — Remove OpenIDSync-managed groups (and memberships)**. Targets groups tagged with `[openidsync.org]`, exports both group and membership CSV backups, removes the group from any parent groups before deletion, and logs every action to `openidsync_danger_remove_groups_<timestamp>.log`. Like the user cleanup, it offers WhatIf mode and double confirmation.
+- **82 — Uninstall OpenIDSync components**. Invokes the scripted uninstall sequence (secret cleanup, optional Graph app removal, module uninstall, and config reset) using the existing danger-zone workflow.
 
-What it does:
-- Scans the specified `-SearchBase` (defaults to `UserSyncConfig.DefaultOU` from the JSON if omitted).
-- Selects only users whose `description` matches `[openidsync.org]`.
-- Exports a backup CSV of targets before removal.
-- Requires double confirmation unless `-Force` is supplied.
-- Supports `-WhatIf` to preview without deleting.
-
-Examples (run in elevated Windows PowerShell):
-```powershell
-Set-Location "c:\Users\Attila\Desktop\Code\openidsync"
-# Preview
-./04_DANGER_Remove_OpenIDSync_Managed_Users.ps1 -SearchBase "CN=Users,DC=contoso,DC=local" -WhatIf
-
-# Delete with confirmations
-./04_DANGER_Remove_OpenIDSync_Managed_Users.ps1 -SearchBase "CN=Users,DC=contoso,DC=local"
-
-# Delete without prompts (CAUTION)
-./04_DANGER_Remove_OpenIDSync_Managed_Users.ps1 -SearchBase "CN=Users,DC=contoso,DC=local" -Force
-```
-
-Consequences to understand:
-- Deletions are permanent; re‑import will produce new object IDs and new passwords.
-- Group memberships and manual changes will be lost.
-- The tool never touches the built‑in `administrator` account.
+All three operations are deliberately noisy: they emit red console banners, demand explicit confirmation phrases, and keep detailed audit files under `.\log`. Preview/WhatIf runs leave the directory untouched but still produce logs so you can review the impact beforehand. Remember that deletions are permanent—re-synchronizing will recreate fresh objects with new passwords or group identifiers.
+ 	- `DangerZoneSkip` (object, optional): Safety valves for the dashboard danger zone routines.
+ 		- `Users.UserPrincipalNames` (array): Case-insensitive UPNs that option 80 will never delete. Defaults include `attila@macskasy.com` and `peter@macskasy.com`.
+ 		- `Users.SamAccountNames` (array): Additional sAMAccountNames to exclude from option 80 (empty by default so you can list e.g. `Administrator`).
 
 ## Requirements
 - Elevated Windows PowerShell 5.1 session

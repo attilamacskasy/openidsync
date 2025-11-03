@@ -49,6 +49,7 @@ try {
             (Join-Path (Join-Path $modulesRoot 'common') 'Orchestrator.ps1'),
             (Join-Path (Join-Path $modulesRoot 'common') 'Summary.ps1'),
             (Join-Path (Join-Path $modulesRoot 'common') 'Dashboard.ps1'),
+            (Join-Path (Join-Path $modulesRoot 'common') 'Uninstall.ps1'),
             (Join-Path (Join-Path $modulesRoot 'ad') 'ActiveDirectory.ps1'),
             (Join-Path (Join-Path $modulesRoot 'transform') 'Users.ps1'),
             (Join-Path (Join-Path $modulesRoot 'sync-sources') 'CSV.ps1'),
@@ -287,7 +288,7 @@ if ([string]::IsNullOrWhiteSpace($DefaultOU)) {
 # Interactive dashboard (UI overhaul) for managing prerequisites and modes
 $dashboardResult = $null
 if (-not $script:NonInteractive -and $showDashboardNext) {
-    $dashboardResult = Invoke-OpenIdSyncDashboard -ConfigPath $script:ConfigPath -OnlineConfigPath $script:OnlineSyncConfigPath -PasswordFilePath $script:CredLogPath -InitialSource $Source -InitialTarget $Target -DefaultOU $DefaultOU
+    $dashboardResult = Invoke-OpenIdSyncDashboard -ConfigPath $script:ConfigPath -OnlineConfigPath $script:OnlineSyncConfigPath -CredentialFilePath $script:CredLogPath -InitialSource $Source -InitialTarget $Target -DefaultOU $DefaultOU
     if ($dashboardResult.ExitRequested -and -not $dashboardResult.StartSync) {
         try { Write-Log -Level 'INFO' -Message 'User exited from OpenIDSync dashboard before synchronization.' } catch {}
         return

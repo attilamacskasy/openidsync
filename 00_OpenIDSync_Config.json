@@ -32,7 +32,16 @@
             "TestM365"
         ],
         "ForceUpdateUserDescriptions": false,
-        "ForceUpdateGroupDescriptions": false
+        "ForceUpdateGroupDescriptions": false,
+        "DangerZoneSkip": {
+            "Users": {
+                "UserPrincipalNames": [
+                    "attila@macskasy.com",
+                    "peter@macskasy.com"
+                ],
+                "SamAccountNames": []
+            }
+        }
     },
     "LoggingConfig": {
         "Mode": "File",
