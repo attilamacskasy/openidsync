@@ -30,7 +30,9 @@
         ],
         "GroupSecurityExceptions": [
             "TestM365"
-        ]
+        ],
+        "ForceUpdateUserDescriptions": false,
+        "ForceUpdateGroupDescriptions": false
     },
     "LoggingConfig": {
         "Mode": "File",

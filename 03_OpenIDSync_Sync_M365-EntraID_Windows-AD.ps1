@@ -35,6 +35,8 @@ $script:ModeMemberships = 'All'
 $script:Target = $Target
 $script:GroupsProcessAll = $false
 $script:MembershipsProcessAll = $false
+$script:ForceUpdateUserDescriptions = $false
+$script:ForceUpdateGroupDescriptions = $false
 
 # Load OpenIDSync modules (modularized by domain) with per-file error handling
 try {
@@ -193,6 +195,13 @@ if (Test-Path -LiteralPath $ConfigPath) {
                         [void]$script:GroupSecurityExceptionSet.Add(([string]$exceptionName).Trim())
                     }
                 }
+            }
+
+            if ($usc.PSObject.Properties['ForceUpdateUserDescriptions']) {
+                $script:ForceUpdateUserDescriptions = ConvertTo-BooleanFriendly $usc.ForceUpdateUserDescriptions
+            }
+            if ($usc.PSObject.Properties['ForceUpdateGroupDescriptions']) {
+                $script:ForceUpdateGroupDescriptions = ConvertTo-BooleanFriendly $usc.ForceUpdateGroupDescriptions
             }
 
             # Online sync config: prefer separate file, fallback to legacy section for backward compatibility
@@ -702,6 +711,9 @@ if ($Source -eq 'Online' -and -not $script:QuitRequested -and $script:ModeGroups
                     $script:Summary['GroupMembersAdded'] += [int]$mres.Added
                     $script:Summary['GroupMembersRemoved'] += [int]$mres.Removed
                 }
+                try {
+                    Set-OpenIdSyncGroupDescription -Group $targetG -SourceGroupName $g.DisplayName -MemberCount ($memberUpns | Measure-Object).Count
+                } catch { Write-Log -Level 'WARN' -Message ("Failed to update description for group {0}: {1}" -f $targetG.SamAccountName, $_.Exception.Message) }
                 if ($securityClone) {
                     Write-Log -Level 'DEBUG' -Message ("Applying membership parity to security clone {0} for source group '{1}'." -f $securityClone.SamAccountName, $g.DisplayName)
                     $secRes = Set-AdGroupMemberships -Group $securityClone -MemberUpns $memberUpns
@@ -710,6 +722,9 @@ if ($Source -eq 'Online' -and -not $script:QuitRequested -and $script:ModeGroups
                         $script:Summary['GroupMembersAdded'] += [int]$secRes.Added
                         $script:Summary['GroupMembersRemoved'] += [int]$secRes.Removed
                     }
+                    try {
+                        Set-OpenIdSyncGroupDescription -Group $securityClone -SourceGroupName $g.DisplayName -MemberCount ($memberUpns | Measure-Object).Count
+                    } catch { Write-Log -Level 'WARN' -Message ("Failed to update description for security clone {0}: {1}" -f $securityClone.SamAccountName, $_.Exception.Message) }
                 }
             }
         }

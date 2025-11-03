@@ -874,6 +874,9 @@ function Write-OpenIdSyncDashboard {
     Write-Host ' 11) View configuration details'
     if ($State.AllRequirementsMet) {
         Write-Host ' 12) View requirement details (all passed)'
+        Write-Host ' 13) Export User List for OpenGWTools VPN-Roadwarriors module'
+        Write-Host '     Generates firstName,lastName,comment CSV based on Entra Office location devices.'
+        Write-Host ''
     }
     Write-Host ' 99) Exit'
     Write-Host ''
@@ -1014,6 +1017,175 @@ function Invoke-PasswordCredentialRedaction {
     [void](Read-Host 'Press Enter to continue...')
 }
 
+function Invoke-OpenGwToolsRoadwarriorExport {
+    param(
+        [psobject]$State
+    )
+
+    Write-Host ''
+    Write-Host '=== OpenGWTools VPN Roadwarriors Export ===' -ForegroundColor Cyan
+
+    if (-not $State) {
+        Write-Host 'Dashboard state not available. Run the dashboard again.' -ForegroundColor Yellow
+        [void](Read-Host 'Press Enter to continue...')
+        return
+    }
+
+    $tenantId = $null
+    $clientId = $null
+    if ($State.OnlineConfig -and $State.OnlineConfig.PSObject.Properties['OnlineSyncConfig']) {
+        $osc = $State.OnlineConfig.OnlineSyncConfig
+        if ($osc) {
+            if ($osc.PSObject.Properties['TenantId']) { $tenantId = [string]$osc.TenantId }
+            if ($osc.PSObject.Properties['ClientId']) { $clientId = [string]$osc.ClientId }
+        }
+    }
+    $clientSecret = $null
+    if ($State.SecretInfo -and $State.SecretInfo.PSObject.Properties['RawValue']) { $clientSecret = [string]$State.SecretInfo.RawValue }
+
+    if ([string]::IsNullOrWhiteSpace($tenantId) -or [string]::IsNullOrWhiteSpace($clientId)) {
+        Write-Host 'TenantId or ClientId is missing from OnlineSyncConfig. Complete requirement 2 first.' -ForegroundColor Yellow
+        [void](Read-Host 'Press Enter to continue...')
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($clientSecret)) {
+        Write-Host 'Client secret not found in environment; an interactive Microsoft Graph sign-in may be required.' -ForegroundColor Yellow
+    }
+
+    $baseDir = $null
+    if ($State.ConfigPath) {
+        try { $baseDir = Split-Path -Path $State.ConfigPath -Parent } catch { $baseDir = $null }
+    }
+    if (-not $baseDir) {
+        try { $baseDir = (Get-Location).Path } catch { $baseDir = '.' }
+    }
+    $logDir = Join-Path -Path $baseDir -ChildPath 'log'
+    try {
+        if (-not (Test-Path -LiteralPath $logDir)) {
+            New-Item -Path $logDir -ItemType Directory -Force | Out-Null
+        }
+    } catch {
+        Write-Host ("Failed to ensure log directory: {0}" -f $_.Exception.Message) -ForegroundColor Red
+        [void](Read-Host 'Press Enter to continue...')
+        return
+    }
+
+    $defaultPath = Join-Path -Path $logDir -ChildPath 'OpenGWTools-Roadwarriors.csv'
+    $prompt = "Enter export path or press Enter for default [$defaultPath]"
+    $userPath = (Read-Host $prompt).Trim()
+    if ([string]::IsNullOrWhiteSpace($userPath)) { $userPath = $defaultPath }
+
+    $outputPath = $userPath
+    $outputDir = $null
+    try { $outputDir = Split-Path -Path $outputPath -Parent } catch { $outputDir = $null }
+    if (-not [string]::IsNullOrWhiteSpace($outputDir)) {
+        try {
+            if (-not (Test-Path -LiteralPath $outputDir)) {
+                New-Item -Path $outputDir -ItemType Directory -Force | Out-Null
+            }
+        } catch {
+            Write-Host ("Failed to create output directory: {0}" -f $_.Exception.Message) -ForegroundColor Red
+            [void](Read-Host 'Press Enter to continue...')
+            return
+        }
+    }
+
+    Write-Host 'Connecting to Microsoft Graph and preparing export (firstName,lastName,comment)...'
+    try { Write-Log -Level 'ACTION' -Message ("OpenGWTools export initiated -> {0}" -f $outputPath) } catch {}
+
+    $users = $null
+    try {
+        $users = Get-EntraUsersViaGraph -TenantId $tenantId -ClientId $clientId -ClientSecret $clientSecret
+    } catch {
+        $err = $_.Exception.Message
+        Write-Host ("Failed to query Microsoft Graph: {0}" -f $err) -ForegroundColor Red
+        try { Write-Log -Level 'ERROR' -Message ("OpenGWTools export failed: {0}" -f $err) } catch {}
+        [void](Read-Host 'Press Enter to continue...')
+        return
+    }
+
+    if (-not $users -or $users.Count -eq 0) {
+        Write-Host 'No users returned from Microsoft Graph.' -ForegroundColor Yellow
+        try { Write-Log -Level 'WARN' -Message 'OpenGWTools export generated no rows (no users).' } catch {}
+        [void](Read-Host 'Press Enter to continue...')
+        return
+    }
+
+    $exportRows = @()
+    $skippedNoOffice = 0
+    foreach ($user in $users) {
+        $firstName = [string]$user.'First name'
+        $lastName = [string]$user.'Last name'
+        if ([string]::IsNullOrWhiteSpace($firstName) -and [string]::IsNullOrWhiteSpace($lastName)) {
+            $display = [string]$user.'Display name'
+            if (-not [string]::IsNullOrWhiteSpace($display)) {
+                $parts = $display -split '\s+', 2
+                if ($parts.Length -ge 2) {
+                    $firstName = $parts[0]
+                    $lastName = $parts[1]
+                } else {
+                    $firstName = $display
+                }
+            }
+        }
+
+        $officeField = [string]$user.'Office'
+        $commentValues = @()
+        if (-not [string]::IsNullOrWhiteSpace($officeField)) {
+            $commentValues = @($officeField -split '[,;]' | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 })
+        }
+
+        if ($commentValues.Count -eq 0) {
+            $skippedNoOffice++
+            try { Write-Log -Level 'DEBUG' -Message ("OpenGWTools export skip -> {0} {1} (no Office location)" -f $firstName, $lastName) } catch {}
+            continue
+        }
+
+        foreach ($comment in $commentValues) {
+            $row = [pscustomobject]@{
+                firstName = $firstName
+                lastName  = $lastName
+                comment   = $comment
+            }
+            $exportRows += $row
+            try { Write-Log -Level 'DEBUG' -Message ("OpenGWTools export row -> {0} {1} comment='{2}'" -f $row.firstName, $row.lastName, $row.comment) } catch {}
+        }
+    }
+
+    try {
+        if (Test-Path -LiteralPath $outputPath) {
+            Remove-Item -LiteralPath $outputPath -Force
+        }
+        if ($exportRows.Count -gt 0) {
+            $exportRows | Export-Csv -LiteralPath $outputPath -Encoding UTF8 -NoTypeInformation -Force
+        } else {
+            Set-Content -LiteralPath $outputPath -Value '"firstName","lastName","comment"'
+        }
+    } catch {
+        $err = $_.Exception.Message
+        Write-Host ("Failed to write CSV: {0}" -f $err) -ForegroundColor Red
+        try { Write-Log -Level 'ERROR' -Message ("OpenGWTools export write failure: {0}" -f $err) } catch {}
+        [void](Read-Host 'Press Enter to continue...')
+        return
+    }
+
+    $userCount = ($users | Measure-Object).Count
+    try { Write-Log -Level 'RESULT' -Message ("OpenGWTools export completed. Users: {0}, Rows: {1}, Path: {2}" -f $userCount, $exportRows.Count, $outputPath) } catch {}
+
+    Write-Host ''
+    if ($exportRows.Count -gt 0) {
+        Write-Host ("Export successful. {0} rows written to {1}" -f $exportRows.Count, $outputPath) -ForegroundColor Green
+    } else {
+        Write-Host ("Export completed with no device entries. Header-only file written to {0}" -f $outputPath) -ForegroundColor Yellow
+    }
+    if ($skippedNoOffice -gt 0) {
+        Write-Host ("Skipped {0} user(s) without Office location values." -f $skippedNoOffice) -ForegroundColor Yellow
+    }
+    Write-Host 'Import this CSV into OpenGWTools VPN Roadwarriors module.'
+    [void](Read-Host 'Press Enter to return to the dashboard...')
+}
+
 function Invoke-OpenIdSyncDashboard {
     param(
         [string]$ConfigPath,
@@ -1041,7 +1213,7 @@ function Invoke-OpenIdSyncDashboard {
             if (-not $req.IsMet) { $available += [string]$req.Id }
         }
         if ($state.AllRequirementsMet) {
-            $available += '4','5','6','7','8','9','10','12'
+            $available += '4','5','6','7','8','9','10','12','13'
         }
         $available += '11','99'
 
@@ -1192,6 +1364,14 @@ function Invoke-OpenIdSyncDashboard {
                     Show-RequirementDetails -Requirements $state.Requirements
                 } else {
                     Write-Host 'Requirement details are only available after all requirements pass.' -ForegroundColor Yellow
+                    [void](Read-Host 'Press Enter to continue...')
+                }
+            }
+            '13' {
+                if ($available -contains '13') {
+                    Invoke-OpenGwToolsRoadwarriorExport -State $state
+                } else {
+                    Write-Host 'Resolve all requirements before exporting the OpenGWTools CSV.' -ForegroundColor Yellow
                     [void](Read-Host 'Press Enter to continue...')
                 }
             }

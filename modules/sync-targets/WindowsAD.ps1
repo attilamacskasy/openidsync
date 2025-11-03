@@ -104,43 +104,163 @@ function Invoke-UserSync {
 
     if ($existing) {
         if ($existing.SamAccountName -ieq 'administrator') { Write-Log -Level 'WARN' -Message "Skip managing 'administrator' account."; Add-Summary 'SkippedAdministrator'; return }
-        $desc = Get-NextDescription -Existing $existing.Description
-        $proxyAddrs = @(); if ($proxyString) { $proxyAddrs = @($proxyString -split '\+') | Where-Object { $_ -match 'smtp:' } | ForEach-Object { [string]$_.Trim() } | Sort-Object -Unique }
-        Write-Log -Level 'ACTION' -Message "Updating existing AD user: $($existing.SamAccountName) ($email)"
-        try {
-            Set-ADUser -Identity $existing.DistinguishedName `
-                -UserPrincipalName $upn `
-                -GivenName $first `
-                -Surname $last `
-                -DisplayName $display `
-                -EmailAddress $email `
-                -Department $department `
-                -Title $title `
-                -Office $office `
-                -City $city `
-                -State $state `
-                -PostalCode $postal `
-                -StreetAddress $street `
-                -MobilePhone $mobile `
-                -OfficePhone $phone `
-                -Description $desc
 
-            if ($proxyAddrs.Count -gt 0) {
-                try { Set-ADUser -Identity $existing.DistinguishedName -Replace @{ proxyAddresses = ([string[]]$proxyAddrs) } -ErrorAction Stop }
-                catch { Write-Log -Level 'WARN' -Message "Failed to set proxyAddresses for ${upn}: $($_.Exception.Message)" }
-            }
-
-            if ($pwdNeverExpires) { Set-ADUser -Identity $existing.DistinguishedName -PasswordNeverExpires $true -ErrorAction SilentlyContinue }
-            else { Set-ADUser -Identity $existing.DistinguishedName -PasswordNeverExpires $false -ErrorAction SilentlyContinue }
-
-            if ($blocked) { Disable-ADAccount -Identity $existing.DistinguishedName -ErrorAction SilentlyContinue }
-            else { Enable-ADAccount -Identity $existing.DistinguishedName -ErrorAction SilentlyContinue }
-
-            if ($countryOrRegion) { try { Set-ADUser -Identity $existing.DistinguishedName -Replace @{ co = [string]$countryOrRegion } -ErrorAction SilentlyContinue } catch { Write-Log -Level 'WARN' -Message "Failed to set country (co) for ${upn}: $($_.Exception.Message)" } }
-
-            Write-Log -Level 'RESULT' -Message "Updated: $upn"; Add-Summary 'Updated'
+        $normalizeString = {
+            param($value)
+            if ($null -eq $value) { return '' }
+            return ([string]$value).Trim()
         }
-        catch { Write-Log -Level 'ERROR' -Message "Failed to update ${upn}: $($_.Exception.Message)"; Add-Summary 'FailedUpdate' }
+        $equalsString = {
+            param($a,$b)
+            $aNorm = & $normalizeString $a
+            $bNorm = & $normalizeString $b
+            return [string]::Equals($aNorm, $bNorm, [System.StringComparison]::OrdinalIgnoreCase)
+        }
+
+        $proxyAddrs = @()
+        if ($proxyString) {
+            $proxyAddrs = @($proxyString -split '\+' | Where-Object { $_ -match 'smtp:' } | ForEach-Object { ([string]$_).Trim() })
+            $proxyAddrs = $proxyAddrs | Sort-Object -Unique
+        }
+        $existingProxyAddrs = @()
+        if ($existing.proxyAddresses) { $existingProxyAddrs = @($existing.proxyAddresses) }
+
+        $existingDescMissing = (-not $existing.PSObject.Properties.Match('Description') -or [string]::IsNullOrWhiteSpace($existing.Description))
+
+        $mainAttrChanges = $false
+        if (-not (& $equalsString $existing.UserPrincipalName $upn)) { $mainAttrChanges = $true }
+        if (-not (& $equalsString $existing.GivenName $first)) { $mainAttrChanges = $true }
+        if (-not (& $equalsString $existing.Surname $last)) { $mainAttrChanges = $true }
+        if (-not (& $equalsString $existing.DisplayName $display)) { $mainAttrChanges = $true }
+        if (-not (& $equalsString $existing.mail $email)) { $mainAttrChanges = $true }
+        if (-not (& $equalsString $existing.Department $department)) { $mainAttrChanges = $true }
+        if (-not (& $equalsString $existing.Title $title)) { $mainAttrChanges = $true }
+        if (-not (& $equalsString $existing.Office $office)) { $mainAttrChanges = $true }
+        if (-not (& $equalsString $existing.l $city)) { $mainAttrChanges = $true }
+        if (-not (& $equalsString $existing.st $state)) { $mainAttrChanges = $true }
+        if (-not (& $equalsString $existing.PostalCode $postal)) { $mainAttrChanges = $true }
+        if (-not (& $equalsString $existing.StreetAddress $street)) { $mainAttrChanges = $true }
+        if (-not (& $equalsString $existing.mobile $mobile)) { $mainAttrChanges = $true }
+        if (-not (& $equalsString $existing.telephoneNumber $phone)) { $mainAttrChanges = $true }
+
+        $proxyChanged = $false
+        if ($proxyAddrs.Count -gt 0) {
+            $desiredProxyNormalized = $proxyAddrs | ForEach-Object { $_.ToLowerInvariant() } | Sort-Object -Unique
+            $existingProxyNormalized = $existingProxyAddrs | ForEach-Object { $_.ToLowerInvariant() } | Sort-Object -Unique
+            if (Compare-Object -ReferenceObject $desiredProxyNormalized -DifferenceObject $existingProxyNormalized) { $proxyChanged = $true }
+        }
+
+        $pwdFlagChanged = $false
+        if ($existing.PSObject.Properties['PasswordNeverExpires']) {
+            $pwdFlagChanged = ([bool]$existing.PasswordNeverExpires -ne [bool]$pwdNeverExpires)
+        } else {
+            $pwdFlagChanged = [bool]$pwdNeverExpires
+        }
+
+        $isEnabled = $true
+        if ($existing.PSObject.Properties['Enabled']) { $isEnabled = [bool]$existing.Enabled }
+        $shouldDisable = ($blocked -and $isEnabled)
+        $shouldEnable = ((-not $blocked) -and (-not $isEnabled))
+
+        $countryChanged = $false
+        if ($countryOrRegion) {
+            if (-not (& $equalsString $existing.co $countryOrRegion)) { $countryChanged = $true }
+        }
+
+        $anyChange = $mainAttrChanges -or $proxyChanged -or $pwdFlagChanged -or $shouldDisable -or $shouldEnable -or $countryChanged
+        if ($existingDescMissing) { $anyChange = $true }
+        $forceDesc = [bool]$script:ForceUpdateUserDescriptions
+        $shouldUpdateDesc = $forceDesc -or $anyChange
+        if ($existingDescMissing) { $shouldUpdateDesc = $true }
+
+        if (-not $anyChange -and -not $forceDesc) {
+            Write-Log -Level 'DEBUG' -Message ("No attribute changes detected for {0}; skipping update." -f $upn)
+            return
+        }
+
+    $newDesc = $null
+        if ($shouldUpdateDesc) {
+            $descReset = $forceDesc -or $existingDescMissing
+            $newDesc = Get-NextDescription -Existing $existing.Description -Reset:$descReset
+        }
+
+        Write-Log -Level 'ACTION' -Message "Updating existing AD user: $($existing.SamAccountName) ($email)"
+        $performedUpdate = $false
+
+        if ($mainAttrChanges) {
+            $setParams = @{
+                Identity          = $existing.DistinguishedName
+                UserPrincipalName = $upn
+                GivenName         = $first
+                Surname           = $last
+                DisplayName       = $display
+                EmailAddress      = $email
+                Department        = $department
+                Title             = $title
+                Office            = $office
+                City              = $city
+                State             = $state
+                PostalCode        = $postal
+                StreetAddress     = $street
+                MobilePhone       = $mobile
+                OfficePhone       = $phone
+            }
+            if ($newDesc) { $setParams['Description'] = $newDesc }
+            try {
+                Set-ADUser @setParams
+                $performedUpdate = $true
+            }
+            catch {
+                Write-Log -Level 'ERROR' -Message "Failed to update ${upn}: $($_.Exception.Message)"
+                Add-Summary 'FailedUpdate'
+                return
+            }
+        }
+        elseif ($newDesc) {
+            try {
+                Set-ADUser -Identity $existing.DistinguishedName -Description $newDesc -ErrorAction Stop
+                $performedUpdate = $true
+            }
+            catch {
+                Write-Log -Level 'ERROR' -Message "Failed to update description for ${upn}: $($_.Exception.Message)"
+                Add-Summary 'FailedUpdate'
+                return
+            }
+        }
+
+        if ($proxyChanged) {
+            try {
+                Set-ADUser -Identity $existing.DistinguishedName -Replace @{ proxyAddresses = ([string[]]$proxyAddrs) } -ErrorAction Stop
+                $performedUpdate = $true
+            }
+            catch { Write-Log -Level 'WARN' -Message "Failed to set proxyAddresses for ${upn}: $($_.Exception.Message)" }
+        }
+
+        if ($pwdFlagChanged) {
+            try {
+                Set-ADUser -Identity $existing.DistinguishedName -PasswordNeverExpires $pwdNeverExpires -ErrorAction SilentlyContinue
+                $performedUpdate = $true
+            } catch {}
+        }
+
+        if ($shouldDisable) {
+            try { Disable-ADAccount -Identity $existing.DistinguishedName -ErrorAction SilentlyContinue; $performedUpdate = $true } catch {}
+        }
+        elseif ($shouldEnable) {
+            try { Enable-ADAccount -Identity $existing.DistinguishedName -ErrorAction SilentlyContinue; $performedUpdate = $true } catch {}
+        }
+
+        if ($countryChanged) {
+            try { Set-ADUser -Identity $existing.DistinguishedName -Replace @{ co = [string]$countryOrRegion } -ErrorAction SilentlyContinue; $performedUpdate = $true }
+            catch { Write-Log -Level 'WARN' -Message "Failed to set country (co) for ${upn}: $($_.Exception.Message)" }
+        }
+
+        if ($performedUpdate) {
+            Write-Log -Level 'RESULT' -Message "Updated: $upn"
+            Add-Summary 'Updated'
+        } else {
+            Write-Log -Level 'DEBUG' -Message ("No modifications were applied to {0}." -f $upn)
+        }
     }
     else {
         $baseUpnLocal = ($upn.Split('@')[0]).ToLower()
@@ -152,7 +272,7 @@ function Invoke-UserSync {
     $sam = Get-NextAvailableSam -BaseSam $baseSam
         if ($sam -ieq 'administrator') { Write-Log -Level 'WARN' -Message "Skip creating user with sAMAccountName 'administrator'."; Add-Summary 'SkippedAdministrator'; return }
 
-        $desc = Get-NextDescription -Existing $null
+    $desc = Get-NextDescription -Existing $null -Reset
         $proxyAddrs = @(); if ($proxyString) { $proxyAddrs = @($proxyString -split '\+') | Where-Object { $_ -match 'smtp:' } | ForEach-Object { [string]$_.Trim() } | Sort-Object -Unique }
 
     $passwordPlain = New-RandomPassword -Length 16

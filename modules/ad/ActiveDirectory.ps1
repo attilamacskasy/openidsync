@@ -13,7 +13,7 @@ function Get-ADUserByEmail {
     param([string]$Email)
     if ([string]::IsNullOrWhiteSpace($Email)) { return $null }
     $emailLc = $Email.Trim().ToLower()
-    $u = Get-ADUser -Filter "mail -eq '$emailLc'" -Properties mail,proxyAddresses,description,displayName,givenName,sn,userPrincipalName,samAccountName,department,title,telephoneNumber,mobile,l,st,postalCode,streetAddress,co,c -ErrorAction SilentlyContinue
+    $u = Get-ADUser -Filter "mail -eq '$emailLc'" -Properties mail,proxyAddresses,description,displayName,givenName,sn,userPrincipalName,samAccountName,department,title,telephoneNumber,mobile,l,st,postalCode,streetAddress,co,c,PasswordNeverExpires -ErrorAction SilentlyContinue
     if ($u) { return $u }
     $needle1 = "smtp:$emailLc"
     $needle2 = "SMTP:$emailLc"
@@ -43,13 +43,43 @@ function Get-NextAvailableSam {
 }
 
 function Get-NextDescription {
-    param([string]$Existing)
+    param(
+        [string]$Existing,
+        [switch]$Reset
+    )
+
+    $resetFlag = [bool]$Reset
     $count = 0
-    if ($Existing -and $Existing -match '\[Update count:\s*(\d+)\]') { $count = [int]$matches[1] }
+    $baseText = ''
+
+    if (-not $resetFlag -and -not [string]::IsNullOrWhiteSpace($Existing)) {
+        try {
+            if ($Existing -match '\[openidsync\.org\]') {
+                $updateMatch = [System.Text.RegularExpressions.Regex]::Match($Existing, '\[Update count:\s*(\d+)\]')
+                if ($updateMatch.Success) { [void][int]::TryParse($updateMatch.Groups[1].Value, [ref]$count) }
+                $baseText = [System.Text.RegularExpressions.Regex]::Replace($Existing, '(?s)\s*\[Last update:.*?\[openidsync\.org\]\s*$', '').Trim()
+            }
+            else {
+                $baseText = $Existing.Trim()
+            }
+        }
+        catch {
+            $resetFlag = $true
+            $count = 0
+            $baseText = ''
+            try { Write-Log -Level 'DEBUG' -Message "Failed to parse existing user description; regenerating from baseline." } catch {}
+        }
+    }
+
+    if ($resetFlag) { $count = 0; $baseText = '' }
+
+    if ([string]::IsNullOrWhiteSpace($baseText)) { $baseText = '[OpenIDSync managed]' }
+
     $count++
     $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
     $src = if ($script:SourceLabel) { [string]$script:SourceLabel } else { 'Unknown' }
-    return "[Last update: $ts] [Update count: $count] [Source: $src] [openidsync.org]"
+    $metadata = "[Last update: $ts] [Update count: $count] [Source: $src] [openidsync.org]"
+    return ("{0} {1}" -f $baseText.Trim(), $metadata).Trim()
 }
 
 # Exception elevation logic: ensure specific users (e.g., Global Administrators) are members of Domain Admins

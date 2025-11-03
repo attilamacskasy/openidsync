@@ -122,6 +122,11 @@ Menu:
 
 	11) View configuration details
 	12) View requirement details (all passed)  # visible only after every requirement succeeds
+	13) Export user list for OpenGWTools VPN Roadwarriors module
+	    - Pull Entra ID users via Microsoft Graph and emit CSV columns: firstName,lastName,comment.
+	    - Treat Office location as comma/semicolon separated device list; emit one row per device entry (e.g., "Dell7720,iPhone12ProMax" => two rows).
+	    - Skip users that have no Office location text; log DEBUG entry for each generated row and each skip.
+	    - Default path: .\log\OpenGWTools-Roadwarriors.csv (prompt allows override); remove previous file before writing and create header-only CSV when no devices exist.
 	99) Exit
 
 Select an option: 1

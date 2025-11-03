@@ -30,6 +30,7 @@ Purpose: Spin up a new on‑premises Active Directory forest and interactively s
 	- Human‑readable console output; file and syslog keep RFC 5424 machine format.
 	- Linux‑style default filenames: `openidsync.log` and `openidsync-credentials.csv`.
 	- Configurable via `LoggingConfig` in `00_OpenIDSync_Config.json`; defaults to file‑only.
+- Description metadata sync refined: descriptions refresh automatically when attributes change, legacy `(compatibility)` placeholders are gone, and new JSON flags let you force updates for users and groups (rewriting the text to the current `[OpenIDSync managed]` + metadata format when enabled).
 
 ### New Features (Groups, Memberships, Privileged Elevation, Multi-Target Prep)
 - Group Synchronization (Entra → AD):
@@ -97,10 +98,11 @@ Menu:
 	7) Change Source Directory
 	8) Change Target Directory
 	9) Start Synchronization
- 10) Remove passwords from Password credentials file (after you backed up initial/temporary passwords in secure location)
- 11) View configuration details
- 12) View requirement details (all passed)
- 99) Exit
+	10) Remove passwords from Password credentials file (after you backed up initial/temporary passwords in secure location)
+	11) View configuration details
+	12) View requirement details (all passed)
+	13) Export User List for OpenGWTools VPN-Roadwarriors module
+	99) Exit
 ```
 
 Only options 1–3 and 11 appear when you first launch the dashboard. As soon as the requirements are green, the rest of the menu is revealed automatically.
@@ -148,6 +150,7 @@ setx OPENIDSYNC_CLIENT_SECRET "<YOUR-SECRET-HERE>"
 
 5) **Optional maintenance**
 - Option **10** redacts generated passwords from the credentials CSV after you store them elsewhere.
+- Option **13** exports a VPN-ready CSV (`firstName,lastName,comment`) for the OpenGWTools Roadwarriors module. Each item from a user's Entra ID **Office location** field becomes a separate row in the output, so a value like `Dell7720,iPhone12ProMax,IndustrialPC001` yields three device assignments. Users with no Office location text are skipped, and the export always overwrites the previous file (writing a header-only CSV if nobody has devices yet).
 - Option **99** exits the dashboard; requirements stay cached so the next run jumps straight to the expanded menu.
 
 CSV mode is still available any time—change the source via option **7** or pass `-Source CSV` on the command line for non-interactive runs:
@@ -215,6 +218,10 @@ After the summary prints, the script now asks what you want to do next:
 
 The selection is also logged in `openidsync.log`, so you have an audit trail of post-run decisions.
 
+### Exporting OpenGWTools VPN CSV
+
+Once requirements 1–3 are satisfied, option **13** appears in the dashboard. The export collects Entra ID users via Microsoft Graph and produces a CSV with the columns `firstName`, `lastName`, and `comment` for the OpenGWTools Roadwarriors module. The user's **Office location** value is treated as a comma- or semicolon-separated device list; each entry becomes an individual row. For example, `Dell7720,iPhone12ProMax,IndustrialPC001` generates three rows for the same person so you can provision multiple VPN profiles. Users without any Office location text are skipped entirely, so the CSV only contains records with explicit device assignments. The wizard saves the file to `.\log\OpenGWTools-Roadwarriors.csv` by default (you can override the path), overwriting the previous export each time, and logs a DEBUG line for every generated row in `openidsync.log`. If no Office location entries are found, a header-only CSV is written so downstream automations always pick up a fresh file. When the service principal secret is missing, you're prompted for an interactive Microsoft Graph sign-in before the export runs.
+
 ## Why this is safe (least privilege by design)
 
 - Least privilege: Only Graph read-only application permissions are granted to the app: `User.Read.All` and `Directory.Read.All`. The script never writes to Entra ID.
@@ -254,6 +261,8 @@ The selection is also logged in `openidsync.log`, so you have an audit trail of 
 	- `SkipUserBasedOnDisplayName` (array of strings): Substrings that, if found in `Display name`, skip processing that row. Defaults if omitted: `(Archive)`, `(Temp)`.
 	- `SkipUserBasedOnUserPrincipalName` (array of strings): Substrings that, if found in UPN, skip processing that row. Defaults if omitted: `#EXT#`, `Temporary`. Additionally, base substrings `archiv` and `temp` are always enforced even if not listed, and all matching is case‑insensitive.
 	- `GroupSecurityExceptions` (array of strings): Display names of non-security source groups that should receive an additional `Sec_` prefixed security group clone with mirrored membership in AD.
+	- `ForceUpdateUserDescriptions` (bool): Forces the AD `description` field to refresh on every run, rewriting it to the latest format even if no other attributes changed. Default: `false`.
+	- `ForceUpdateGroupDescriptions` (bool): Forces group descriptions to refresh on every run, rewriting them to the latest format even when no other changes are detected. Default: `false`.
  
 - `LoggingConfig`:
 	- `Mode` (string): `File`, `Syslog`, or `Both`. Default: `File`.
