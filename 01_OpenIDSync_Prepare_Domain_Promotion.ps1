@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     This script prepares a fresh server for running Domain Controller promotion using the DSC configuration in DomainPromotionConfig.ps1.
-    It performs the following steps (values can come from 00_OpenIDSync_Config.json):
+    It performs the following steps (values can come from OpenIDSync_Config.json):
       - Verifies administrative privileges and sets execution policy (Process scope)
       - Ensures TLS 1.2 is enabled for PowerShell Gallery operations
       - Installs NuGet package provider and trusts the PowerShell Gallery
@@ -22,7 +22,7 @@
     Minimum version for the PSDscResources module (default: 2.12.0.0)
 
 .PARAMETER ConfigPath
-    Optional path to 00_OpenIDSync_Config.json (default: next to this script). Reads PrepareConfig if present.
+    Optional path to OpenIDSync_Config.json (default: next to this script). Reads PrepareConfig if present.
 
 .EXAMPLE
     .\01_Prepare_Domain_Promotion.ps1
@@ -39,7 +39,7 @@ param(
     [bool]$InstallDNS = $true,
     [string]$MinActiveDirectoryDsc = '6.2.0',
     [string]$MinPSDscResources    = '2.12.0.0',
-    [string]$ConfigPath = (Join-Path -Path $PSScriptRoot -ChildPath '00_OpenIDSync_Config.json')
+    [string]$ConfigPath = (Join-Path -Path $PSScriptRoot -ChildPath 'OpenIDSync_Config.json')
 )
 
 # Load optional JSON for defaults

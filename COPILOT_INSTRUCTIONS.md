@@ -34,7 +34,7 @@ Top-level numbered scripts orchestrate phases (01 prepare, 02 promote, 03 sync, 
 
 ---
 ## 4. Core Responsibilities
-- `03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1`: Orchestrates run; reads config; interactive/background mode selection; calls Graph + AD modules.
+- `OpenIDSync.ps1`: Orchestrates run; reads config; interactive/background mode selection; calls Graph + AD modules.
 - `Graph.ps1`: Keeps *only* what’s needed (users, groups, directory role membership, group member expansion). Reconnects with required scopes as needed.
 - `ActiveDirectory.ps1`: AD lookup helpers, sAM generation, description tagging, and privileged elevation (`Invoke-OpenIdSyncExceptionElevation`).
 - `WindowsAD.Groups.ps1`: Group name normalization + membership reconciliation idempotency.
@@ -65,8 +65,8 @@ Avoid multi-line messages; keep log parsing easy.
 
 ---
 ## 7. Configuration Sources
-- `00_OpenIDSync_Config.json`: Main (UserSyncConfig, LoggingConfig, DomainPromotionConfig, etc.).
-- `00_OpenIDSync_OnlineSyncConfig.json`: Stores *only* tenant/app IDs & secret env var name. **Never** store client secrets in any file.
+- `OpenIDSync_Config.json`: Main (UserSyncConfig, LoggingConfig, DomainPromotionConfig, etc.).
+- `OpenIDSync_OnlineSyncConfig.json`: Stores *only* tenant/app IDs & secret env var name. **Never** store client secrets in any file.
 - Background run modes optionally set via `SyncModes` object: `{ "Users": "All|Prompt|Skip", "Groups": ..., "Memberships": ... }`.
 
 If adding new config keys: update README with description + defaults; maintain backward compatibility (probe, fallback, convert).

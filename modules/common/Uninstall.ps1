@@ -46,10 +46,10 @@ function Invoke-OpenIdSyncUninstall {
     }
 
     if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
-        $ConfigPath = Join-Path -Path $scriptRoot -ChildPath '00_OpenIDSync_Config.json'
+        $ConfigPath = Join-Path -Path $scriptRoot -ChildPath 'OpenIDSync_Config.json'
     }
     if ([string]::IsNullOrWhiteSpace($OnlineSyncConfigPath)) {
-        $OnlineSyncConfigPath = Join-Path -Path $scriptRoot -ChildPath '00_OpenIDSync_OnlineSyncConfig.json'
+        $OnlineSyncConfigPath = Join-Path -Path $scriptRoot -ChildPath 'OpenIDSync_OnlineSyncConfig.json'
     }
 
     Set-StrictMode -Version Latest
@@ -69,7 +69,7 @@ function Invoke-OpenIdSyncUninstall {
         Write-Host ("[{0}] {1}" -f $Level, $Message) -ForegroundColor $color
     }
 
-    $logScript = Join-Path -Path $scriptRoot -ChildPath '50_OpenIDSync_Logging.ps1'
+    $logScript = Join-Path -Path $scriptRoot -ChildPath 'modules/logging/Write-Log.ps1'
     if (Test-Path -LiteralPath $logScript) {
         try { . $logScript } catch { Write-ConsoleLog -Level 'WARN' -Message ("Failed to import logging script: {0}" -f $_.Exception.Message) }
     }

@@ -3,7 +3,7 @@
     Promote a fresh Windows Server (2022/2025) to the first Domain Controller of a new forest using PowerShell DSC.
 
 .DESCRIPTION
-    Reads settings from a JSON file (00_OpenIDSync_Config.json) and applies a DSC configuration
+    Reads settings from a JSON file (OpenIDSync_Config.json) and applies a DSC configuration
     named 'DomainPromotionConfig' to deploy a new AD DS forest using Microsoft ActiveDirectoryDsc (ADDomain resource).
 
     This script mirrors the logic from the referenced 03_Promote_First_Domain_Controller.ps1 but uses DSC and consumes DomainPromotionConfig
@@ -14,16 +14,16 @@
     - Compile and apply DSC configuration that uses ADDomain to create a new forest
 
 .PARAMETER ConfigPath
-    Path to JSON (default: ./00_OpenIDSync_Config.json next to this script)
+    Path to JSON (default: ./OpenIDSync_Config.json next to this script)
 
 .EXAMPLE
-    .\02_Domain_Promotion.ps1 -ConfigPath .\00_OpenIDSync_Config.json
+    .\02_OpenIDSync_Domain_Promotion.ps1 -ConfigPath .\OpenIDSync_Config.json
 
 .NOTES
     Run as Administrator. Server will reboot when promotion completes.
 #>
 param(
-    [string]$ConfigPath = (Join-Path -Path $PSScriptRoot -ChildPath '00_OpenIDSync_Config.json'),
+    [string]$ConfigPath = (Join-Path -Path $PSScriptRoot -ChildPath 'OpenIDSync_Config.json'),
     [Parameter(Mandatory=$false)]
     [System.Management.Automation.PSCredential]$SetupCredential
 )

@@ -730,8 +730,8 @@ function Write-OpenIdSyncDashboard {
     Write-Host ("Target Directory: {0}" -f $State.TargetDisplay)
     Write-Host ''
 
-    $configFileLeaf = if ($State.ConfigPath) { Split-Path -Path $State.ConfigPath -Leaf } else { '00_OpenIDSync_Config.json' }
-    $onlineFileLeaf = if ($State.OnlineConfigPath) { Split-Path -Path $State.OnlineConfigPath -Leaf } else { '00_OpenIDSync_OnlineSyncConfig.json' }
+    $configFileLeaf = if ($State.ConfigPath) { Split-Path -Path $State.ConfigPath -Leaf } else { 'OpenIDSync_Config.json' }
+    $onlineFileLeaf = if ($State.OnlineConfigPath) { Split-Path -Path $State.OnlineConfigPath -Leaf } else { 'OpenIDSync_OnlineSyncConfig.json' }
 
     $domainNameValue = 'None'
     $netbiosValue = 'None'
@@ -1655,13 +1655,13 @@ function Invoke-DangerZoneUninstallOpenIdSync {
     $configPath = $null
     if ($State -and $State.PSObject.Properties['ConfigPath']) { $configPath = [string]$State.ConfigPath }
     if ([string]::IsNullOrWhiteSpace($configPath)) {
-        $configPath = Join-Path -Path (Get-DashboardBaseDirectory -ConfigPath $null) -ChildPath '00_OpenIDSync_Config.json'
+        $configPath = Join-Path -Path (Get-DashboardBaseDirectory -ConfigPath $null) -ChildPath 'OpenIDSync_Config.json'
     }
 
     $onlineConfigPath = $null
     if ($State -and $State.PSObject.Properties['OnlineConfigPath']) { $onlineConfigPath = [string]$State.OnlineConfigPath }
     if ([string]::IsNullOrWhiteSpace($onlineConfigPath)) {
-        $onlineConfigPath = Join-Path -Path (Get-DashboardBaseDirectory -ConfigPath $configPath) -ChildPath '00_OpenIDSync_OnlineSyncConfig.json'
+        $onlineConfigPath = Join-Path -Path (Get-DashboardBaseDirectory -ConfigPath $configPath) -ChildPath 'OpenIDSync_OnlineSyncConfig.json'
     }
 
     $secretEnvName = 'OPENIDSYNC_CLIENT_SECRET'

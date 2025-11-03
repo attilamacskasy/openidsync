@@ -20,7 +20,7 @@ Purpose: Spin up a new on‑premises Active Directory forest and interactively s
 	- Sync mode, source, and target controls unlock only after all requirements pass, keeping new operators on the happy path.
 - Unattended mode:
 	- `-NonInteractive` switch for scheduled runs; combines well with `-AllUsers` to process every user without prompts.
-	- `-NonInteractive` requires a defined source: either pass `-Source Online|CSV` or set `UserSyncConfig.PreferredSource` in `00_OpenIDSync_Config.json`. If missing, the script stops with guidance.
+	- `-NonInteractive` requires a defined source: either pass `-Source Online|CSV` or set `UserSyncConfig.PreferredSource` in `OpenIDSync_Config.json`. If missing, the script stops with guidance.
 	- `PreferredSource` moved into the main config under `UserSyncConfig` (removed from the online config file).
 
 - App creation permissions: First‑run app creation now requests Graph Application permissions `User.Read.All` and `Directory.Read.All` and attempts to grant admin consent programmatically.
@@ -29,7 +29,7 @@ Purpose: Spin up a new on‑premises Active Directory forest and interactively s
 	- Structured logging module with three modes: `File`, `Syslog` (UDP), or `Both`.
 	- Human‑readable console output; file and syslog keep RFC 5424 machine format.
 	- Linux‑style default filenames: `openidsync.log` and `openidsync-credentials.csv`.
-	- Configurable via `LoggingConfig` in `00_OpenIDSync_Config.json`; defaults to file‑only.
+	- Configurable via `LoggingConfig` in `OpenIDSync_Config.json`; defaults to file‑only.
 - Description metadata sync refined: descriptions refresh automatically when attributes change, legacy `(compatibility)` placeholders are gone, and new JSON flags let you force updates for users and groups (rewriting the text to the current `[OpenIDSync managed]` + metadata format when enabled).
 
 ### New Features (Groups, Memberships, Privileged Elevation, Multi-Target Prep)
@@ -80,7 +80,7 @@ Purpose: Spin up a new on‑premises Active Directory forest and interactively s
 - Canonical object orchestration (wiring `Contracts.ps1` + `Orchestrator.ps1` end-to-end for any-source → any-target transforms).
 
 ## Interactive dashboard workflow
-Running `./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1` interactively now launches a full-screen dashboard that summarizes your configuration, highlights any missing prerequisites, and lets you start synchronization only when everything is ready.
+Running `./OpenIDSync.ps1` interactively now launches a full-screen dashboard that summarizes your configuration, highlights any missing prerequisites, and lets you start synchronization only when everything is ready.
 
 - Requirement cards show in red while unmet and disappear automatically once satisfied. After that, option `12) View requirement details (all passed)` gives you a read-only audit view on demand.
 - Configuration, password-log, and logging summaries appear at the top of the screen so you always know which files the run will touch.
@@ -111,8 +111,8 @@ Only options 1–3 and 11 appear when you first launch the dashboard. As soon as
 Each prerequisite has a dedicated action and clear on-screen guidance:
 
 - **Requirement 1 — Install Microsoft Graph modules**: Option 1 calls the bundled installer, pulls the exact submodules (`Microsoft.Graph.Authentication`, `Microsoft.Graph.Users`, `Microsoft.Graph.Applications`, `Microsoft.Graph.Identity.DirectoryManagement`, `Microsoft.Graph.Groups`), and refreshes the requirement card in-place. No manual module hunting required.
-- **Requirement 2 — Create the app registration**: Option 2 signs you in once, creates the app + service principal, saves the identifiers to `00_OpenIDSync_OnlineSyncConfig.json`, and prints the generated client secret with masking guidance. The dashboard reminds you to store the secret by running `setx OPENIDSYNC_CLIENT_SECRET "<SECRET>"` and never writes the value to disk.
-- **Requirement 3 — Verify API permissions**: Option 3 runs `Test-GraphReadOperations`, reads real directory data through Microsoft Graph, and surfaces any missing consent with friendly messages. Successful results are cached in `00_OpenIDSync_OnlineSyncConfig.json.PermissionVerification`, so subsequent dashboard launches open instantly while still letting you force a refresh if desired.
+- **Requirement 2 — Create the app registration**: Option 2 signs you in once, creates the app + service principal, saves the identifiers to `OpenIDSync_OnlineSyncConfig.json`, and prints the generated client secret with masking guidance. The dashboard reminds you to store the secret by running `setx OPENIDSYNC_CLIENT_SECRET "<SECRET>"` and never writes the value to disk.
+- **Requirement 3 — Verify API permissions**: Option 3 runs `Test-GraphReadOperations`, reads real directory data through Microsoft Graph, and surfaces any missing consent with friendly messages. Successful results are cached in `OpenIDSync_OnlineSyncConfig.json.PermissionVerification`, so subsequent dashboard launches open instantly while still letting you force a refresh if desired.
 
 The net effect: new operators typically complete all three steps in a couple of minutes, and repeat runs skip straight to the sync options because the requirements stay satisfied and hidden.
 
@@ -134,7 +134,7 @@ Set-Location "c:\Users\Attila\Desktop\Code\openidsync"
 
 3) **Launch the dashboard and satisfy requirements**
 ```powershell
-./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -DefaultOU "CN=Users,DC=contoso,DC=local"
+./OpenIDSync.ps1 -DefaultOU "CN=Users,DC=contoso,DC=local"
 ```
 - Choose option **1** if Graph modules are missing; the installer runs automatically.
 - Choose option **2** to create the App Registration and Service Principal. The dashboard prints the client secret once—store it with:
@@ -155,7 +155,7 @@ setx OPENIDSYNC_CLIENT_SECRET "<YOUR-SECRET-HERE>"
 
 CSV mode is still available any time—change the source via option **7** or pass `-Source CSV` on the command line for non-interactive runs:
 ```powershell
-./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -Source CSV -CsvPath ".\users.csv" -DefaultOU "CN=Users,DC=contoso,DC=local"
+./OpenIDSync.ps1 -Source CSV -CsvPath ".\users.csv" -DefaultOU "CN=Users,DC=contoso,DC=local"
 ```
 
 If you need to clear cached tokens before switching auth contexts, run:
@@ -166,10 +166,10 @@ If you need to clear cached tokens before switching auth contexts, run:
 ### Unattended/scheduled runs (non-interactive)
 ```powershell
 # Online (App-only) — ensure the client secret env var exists for the scheduled account
-./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -NonInteractive -AllUsers -Source Online -DefaultOU "CN=Users,DC=contoso,DC=local"
+./OpenIDSync.ps1 -NonInteractive -AllUsers -Source Online -DefaultOU "CN=Users,DC=contoso,DC=local"
 
 # CSV
-./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -NonInteractive -AllUsers -Source CSV -CsvPath ".\users.csv" -DefaultOU "CN=Users,DC=contoso,DC=local"
+./OpenIDSync.ps1 -NonInteractive -AllUsers -Source CSV -CsvPath ".\users.csv" -DefaultOU "CN=Users,DC=contoso,DC=local"
 ```
 Notes for non‑interactive:
 - If `-Source` isn’t passed and `UserSyncConfig.PreferredSource` isn’t set, the script will stop with guidance to set it (recommended: `Online`).
@@ -186,7 +186,7 @@ This tool is designed to be safe and transparent:
 Step 1 — Launch the dashboard and create the App & SP
 1. Run:
 ```powershell
-./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -DefaultOU "CN=Users,DC=contoso,DC=local"
+./OpenIDSync.ps1 -DefaultOU "CN=Users,DC=contoso,DC=local"
 ```
 2. In the dashboard, choose option **1** if the Microsoft Graph modules are missing, then choose option **2**. Sign in interactively when prompted so the script can create the App Registration, Service Principal, and a client secret.
 3. The dashboard prints the client secret once. Copy it immediately and set it as an environment variable for your user:
@@ -204,7 +204,7 @@ Step 3 — Use App-only on the next run
 1. Open a NEW Windows PowerShell window (to load the environment variable).
 2. Run:
 ```powershell
-./03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1 -DefaultOU "CN=Users,DC=contoso,DC=local"
+./OpenIDSync.ps1 -DefaultOU "CN=Users,DC=contoso,DC=local"
 ```
 3. The dashboard will reopen with the requirement cards hidden. Select option **3** to confirm permissions succeed, then press **9** to start the sync. The run summary prints an "Authentication Context Used" block showing App-only with your app’s identifiers.
 
@@ -231,15 +231,15 @@ Once requirements 1–3 are satisfied, option **13** appears in the dashboard. T
 - On‑prem changes are explicit: Each user is previewed, and you decide `[Y]es/[N]o/[A]ll/[Q]uit`. Updates are idempotent.
 
 ## Files
-- `00_OpenIDSync_Config.json` — Central configuration for all scripts
+- `OpenIDSync_Config.json` — Central configuration for all scripts
 - `01_OpenIDSync_Prepare_Domain_Promotion.ps1` — Installs prerequisites (features and modules) and verifies DSC resources
 - `02_OpenIDSync_Domain_Promotion.ps1` — Promotes the server to the first DC using DSC (`ADDomain` resource)
-- `03_OpenIDSync_Sync_M365-EntraID_Windows-AD.ps1` — Online (Graph) or CSV user sync into AD
+- `OpenIDSync.ps1` — Interactive dashboard + Online/CSV sync orchestration
 - `97_Set_OPENIDSYNC_CLIENT_SECRET.ps1` — Helper to set the `OPENIDSYNC_CLIENT_SECRET` env var
 - `98_Reset_Azure_Login_Session.ps1` — Clears cached Graph/Az sessions and token caches
 - **Dashboard DANGER ZONE (options 80–82)** — Remove OpenIDSync-managed AD users or groups, or run the full uninstall/cleanup sequence directly from the interactive menu
 
-## Configuration (00_OpenIDSync_Config.json)
+## Configuration (OpenIDSync_Config.json)
 - `DomainPromotionConfig`:
 	- `DomainName` (required): e.g., `contoso.local`
 	- `NetBIOSName` (required): e.g., `CONTOSO`
@@ -268,15 +268,15 @@ Once requirements 1–3 are satisfied, option **13** appears in the dashboard. T
 	- `FilePath` (string): Path for the audit log. Default: `./openidsync.log` (Linux-like naming).
 	- `SyslogServer` (string): Hostname or IP of a UDP syslog server.
 	- `SyslogPort` (int): UDP port of the syslog server. Default: `514`.
-  The sync script (`03_...`) reads this block and initializes logging accordingly. Console echo is preserved. When `Mode` is `Syslog` or `Both`, logs are also sent via UDP to the configured syslog endpoint.
+	The sync script (`OpenIDSync.ps1`) reads this block and initializes logging accordingly. Console echo is preserved. When `Mode` is `Syslog` or `Both`, logs are also sent via UDP to the configured syslog endpoint.
  
-- `00_OpenIDSync_OnlineSyncConfig.json` (auto‑populated; no secrets):
+- `OpenIDSync_OnlineSyncConfig.json` (auto‑populated; no secrets):
 	- `TenantId` (string): Entra ID tenant ID.
 	- `ClientId` (string): App Registration (application) ID.
 	- `SpObjectId` (string): Service principal object id.
 	- `ClientSecretEnvVar` (string): Environment variable name used to read the client secret (default `OPENIDSYNC_CLIENT_SECRET`).
 
-Important: The online sync IDs are only persisted in `00_OpenIDSync_OnlineSyncConfig.json`. The main config `00_OpenIDSync_Config.json` is never auto‑modified by the online sync code.
+Important: The online sync IDs are only persisted in `OpenIDSync_OnlineSyncConfig.json`. The main config `OpenIDSync_Config.json` is never auto‑modified by the online sync code.
 
 Example JSON (trimmed):
 ```json
@@ -309,7 +309,7 @@ Example JSON (trimmed):
 }
 ```
 
-And the separate online sync config file `00_OpenIDSync_OnlineSyncConfig.json`:
+And the separate online sync config file `OpenIDSync_OnlineSyncConfig.json`:
 
 ```json
 {
@@ -334,7 +334,7 @@ And the separate online sync config file `00_OpenIDSync_OnlineSyncConfig.json`:
 - Respects `InstallDNS`, NTDS/SYSVOL paths, and sets `ForestMode`/`DomainMode` to `WinThreshold`
 - Configures LCM to reboot and continue configuration as needed
 
-3) Sync users (`03_...`)
+3) Sync users (`OpenIDSync.ps1`)
 - Reads users from either:
   - Online: Microsoft Graph (Entra ID) — App-only or delegated connection
   - CSV: Microsoft 365 Admin “Active users” export

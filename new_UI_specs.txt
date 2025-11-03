@@ -11,7 +11,7 @@ Code generated using: GPT-5 Codex (Preview) – Premium Model x1
 Source Directory: Azure Entra ID (Microsoft)
 Target Directory: Windows Active Directory (Microsoft)
 
-Base configuration loaded from file: [00_OpenIDSync_Config.json]  # white background, black text
+Base configuration loaded from file: [OpenIDSync_Config.json]  # white background, black text
 
 	DomainPromotionConfig:
 		DomainName:	macskasy.com
@@ -26,7 +26,7 @@ Base configuration loaded from file: [00_OpenIDSync_Config.json]  # white backgr
 			#EXT#
 			Temporary
 
-Online configuration loaded from file: [00_OpenIDSync_OnlineSyncConfig.json]  # white background, black text
+Online configuration loaded from file: [OpenIDSync_OnlineSyncConfig.json]  # white background, black text
 
 	App registration name: xxx
 	TenantId:
@@ -79,7 +79,7 @@ Requirement 3 – Required API permissions granted:  # show with RED background/
 	# On failure, surface the descriptive error returned by Test-GraphReadOperations (e.g. Authorization_RequestDenied …).
 	# When no eligible group is available the membership test reports “Skipped (no group available to test memberships).”
 
-Requirement details are cached after a successful check and persisted to 00_OpenIDSync_OnlineSyncConfig.json.PermissionVerification. Re-running the dashboard reads from cache unless the user forces a refresh.
+Requirement details are cached after a successful check and persisted to OpenIDSync_OnlineSyncConfig.json.PermissionVerification. Re-running the dashboard reads from cache unless the user forces a refresh.
 
 Menu:
 
@@ -91,7 +91,7 @@ Menu:
 
 	# Requirement-related menu items appear only while the associated requirement is unmet. Once all requirements pass, the requirement block is hidden and options 1–3 no longer display.
 
-	4) Set user sync mode [S]KIP | [A]LL | [P]ROMPT  # display the configured value; settings persist in 00_OpenIDSync_Config.json
+	4) Set user sync mode [S]KIP | [A]LL | [P]ROMPT  # display the configured value; settings persist in OpenIDSync_Config.json
 	5) Set group sync mode [S]KIP | [A]LL | [P]ROMPT
 	6) Set group membership sync mode [S]KIP | [A]LL | [P]ROMPT
 

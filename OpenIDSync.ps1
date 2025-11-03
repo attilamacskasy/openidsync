@@ -18,9 +18,9 @@
     [switch]$AutoCreateGraphApp,
     [switch]$AutoInstallGraphModules,
     [switch]$AssignDirectoryReaderToApp,
-    [string]$ConfigPath = (Join-Path -Path $PSScriptRoot -ChildPath '00_OpenIDSync_Config.json'),
+    [string]$ConfigPath = (Join-Path -Path $PSScriptRoot -ChildPath 'OpenIDSync_Config.json'),
     # New: keep OnlineSyncConfig in a separate file to avoid modifying user's main config
-    [string]$OnlineSyncConfigPath = (Join-Path -Path $PSScriptRoot -ChildPath '00_OpenIDSync_OnlineSyncConfig.json')
+    [string]$OnlineSyncConfigPath = (Join-Path -Path $PSScriptRoot -ChildPath 'OpenIDSync_OnlineSyncConfig.json')
 )
 
 # Make config paths available script-wide
@@ -139,8 +139,10 @@ if (-not (Get-Command -Name Get-TenantLicenseInfo -ErrorAction SilentlyContinue)
 
 # Try to load logging module
 try {
-    $logModulePath = Join-Path -Path $PSScriptRoot -ChildPath '50_OpenIDSync_Logging.ps1'
-    if (Test-Path -LiteralPath $logModulePath) { . $logModulePath }
+    if (-not (Get-Command -Name Initialize-Logger -ErrorAction SilentlyContinue)) {
+        $logModulePath = Join-Path -Path $PSScriptRoot -ChildPath 'modules/logging/Write-Log.ps1'
+        if (Test-Path -LiteralPath $logModulePath) { . $logModulePath }
+    }
 } catch {}
 
 ## Graph module configuration and function cap moved to modules/microsoft-graph/Graph.ps1
@@ -276,7 +278,7 @@ if ($NonInteractive) { $script:NonInteractive = $true; $script:ProcessAll = $tru
 if ($AllUsers) { $script:ProcessAll = $true }
 if (-not $DefaultOU) {
     if ($script:NonInteractive) {
-        throw "Default OU is required in -NonInteractive mode. Provide -DefaultOU or set it in 00_OpenIDSync_Config.json."
+    throw "Default OU is required in -NonInteractive mode. Provide -DefaultOU or set it in OpenIDSync_Config.json."
     } else {
         $DefaultOU = Read-Host "Enter default OU distinguishedName for new/managed users (e.g. OU=Users,DC=example,DC=com)"
     }
@@ -314,7 +316,7 @@ if (Test-Path -LiteralPath $ConfigPath) {
 
 # Choose source if not specified explicitly or via config
 if ([string]::IsNullOrWhiteSpace($Source) -and $script:NonInteractive) {
-    $cfgPathMsg = if ($script:ConfigPath) { $script:ConfigPath } else { '00_OpenIDSync_Config.json' }
+    $cfgPathMsg = if ($script:ConfigPath) { $script:ConfigPath } else { 'OpenIDSync_Config.json' }
     $msg = "-NonInteractive: Missing input source. Set UserSyncConfig.PreferredSource to 'Online' (recommended) or 'CSV' in $cfgPathMsg, or pass -Source Online/CSV on the command line."
     throw $msg
 }
