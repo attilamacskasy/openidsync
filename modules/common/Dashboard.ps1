@@ -1887,6 +1887,37 @@ function Invoke-OpenGwToolsRoadwarriorExport {
         return
     }
 
+    $removeDiacriticsAvailable = $false
+    try {
+        if (Get-Command -Name Remove-Diacritics -ErrorAction SilentlyContinue) { $removeDiacriticsAvailable = $true }
+    } catch { $removeDiacriticsAvailable = $false }
+
+    $stripDiacritics = {
+        param([string]$Value)
+        if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+        if ($removeDiacriticsAvailable) { return Remove-Diacritics -InputString $Value }
+        $formD = $Value.Normalize([System.Text.NormalizationForm]::FormD)
+        $sb = New-Object System.Text.StringBuilder
+        foreach ($ch in $formD.ToCharArray()) {
+            $cat = [System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($ch)
+            if ($cat -ne [System.Globalization.UnicodeCategory]::NonSpacingMark) { [void]$sb.Append($ch) }
+        }
+        return $sb.ToString().Normalize([System.Text.NormalizationForm]::FormC)
+    }
+
+    $sanitizeForExport = {
+        param([string]$Value,[string]$Fallback = '')
+        if ([string]::IsNullOrWhiteSpace($Value)) { return $Fallback }
+        $sanitized = & $stripDiacritics $Value
+        if ([string]::IsNullOrWhiteSpace($sanitized)) { return $Fallback }
+        $sanitized = $sanitized -replace '\.', '_'
+        $sanitized = $sanitized -replace '\s+', '_'
+        $sanitized = $sanitized -replace "[^A-Za-z0-9_\-]", '_'
+        $sanitized = ($sanitized -replace '_+', '_').Trim('_')
+        if ([string]::IsNullOrWhiteSpace($sanitized)) { return $Fallback }
+        return $sanitized
+    }
+
     $exportRows = @()
     $skippedNoOffice = 0
     foreach ($user in $users) {
@@ -1905,6 +1936,9 @@ function Invoke-OpenGwToolsRoadwarriorExport {
             }
         }
 
+        $safeFirstName = & $sanitizeForExport $firstName 'User'
+        $safeLastName = & $sanitizeForExport $lastName ''
+
         $officeField = [string]$user.'Office'
         $commentValues = @()
         if (-not [string]::IsNullOrWhiteSpace($officeField)) {
@@ -1913,15 +1947,21 @@ function Invoke-OpenGwToolsRoadwarriorExport {
 
         if ($commentValues.Count -eq 0) {
             $skippedNoOffice++
-            try { Write-Log -Level 'DEBUG' -Message ("OpenGWTools export skip -> {0} {1} (no Office location)" -f $firstName, $lastName) } catch {}
+            try { Write-Log -Level 'DEBUG' -Message ("OpenGWTools export skip -> {0} {1} (no Office location)" -f $safeFirstName, $safeLastName) } catch {}
             continue
         }
 
         foreach ($comment in $commentValues) {
+            $safeComment = & $sanitizeForExport $comment ''
+            if ([string]::IsNullOrWhiteSpace($safeComment)) {
+                try { Write-Log -Level 'DEBUG' -Message ("OpenGWTools export skip -> {0} {1} comment '{2}' sanitized empty" -f $safeFirstName, $safeLastName, $comment) } catch {}
+                continue
+            }
+
             $row = [pscustomobject]@{
-                firstName = $firstName
-                lastName  = $lastName
-                comment   = $comment
+                firstName = $safeFirstName
+                lastName  = $safeLastName
+                comment   = $safeComment
             }
             $exportRows += $row
             try { Write-Log -Level 'DEBUG' -Message ("OpenGWTools export row -> {0} {1} comment='{2}'" -f $row.firstName, $row.lastName, $row.comment) } catch {}
